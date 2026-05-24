@@ -58,8 +58,12 @@ class InMemoryAbuseGuard:
                 "Rate limit exceeded. Try again in about an hour."
             )
 
-        ip_hits.append(now)
-        guest_hits.append(now)
+    def record(self, guest_session_id: uuid.UUID | None, client_ip: str) -> None:
+        now = time.time()
+        ip = client_ip[:64]
+        guest_key = f"{guest_session_id or 'anon'}:{ip}"
+        self._ip_hits[ip].append(now)
+        self._guest_ip_hits[guest_key].append(now)
         self._last_submit[ip] = now
 
 
@@ -134,6 +138,9 @@ class DbAbuseGuard:
                     "Rate limit exceeded. Try again in about an hour."
                 )
 
+    async def record(self, guest_session_id: uuid.UUID | None, client_ip: str) -> None:
+        ip = client_ip[:64]
+        async with get_session_factory()() as session:
             session.add(
                 RateLimitEventRow(
                     guest_session_id=guest_session_id,
@@ -163,3 +170,16 @@ async def enforce_job_creation_limits(
         await get_db_abuse_guard(s).check(guest_session_id, client_ip)
     else:
         get_memory_abuse_guard(s).check(guest_session_id, client_ip)
+
+
+async def record_job_creation_limits(
+    guest_session_id: uuid.UUID | None,
+    client_ip: str,
+    settings: Settings | None = None,
+) -> None:
+    """Record a successful job creation for rate-limit windows (call after job is created)."""
+    s = settings or get_settings()
+    if s.use_database:
+        await get_db_abuse_guard(s).record(guest_session_id, client_ip)
+    else:
+        get_memory_abuse_guard(s).record(guest_session_id, client_ip)

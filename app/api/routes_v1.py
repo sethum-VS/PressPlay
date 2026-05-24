@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
+from app.api.deps import check_concurrent_cap, check_rate_limit, get_client_ip, verify_demo_secret
 from app.api.deps_guest import get_guest_id
 from app.api.job_ids import parse_job_id
 from app.api.job_creation import (
@@ -46,6 +46,7 @@ async def create_job_v1(
             guest_session_id=get_guest_id(request),
             webhook_url=body.webhook_url,
             vertical=brand_vertical,
+            client_ip=get_client_ip(request),
         )
         session_token = getattr(request.state, "session_token", None)
         response = JobCreateResponse(

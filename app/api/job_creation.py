@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import uuid
 
-from app.api.deps import check_concurrent_cap, check_rate_limit
 from app.config import Settings
 from app.domain.errors import ValidationError
 from app.domain.models import BrandVertical, JobRecord, ProcessingMode
 from app.repositories.factory import get_job_store
+from app.services.abuse_guard import record_job_creation_limits
 from app.services.pipeline import schedule_pipeline
 from app.services.youtube import YouTubeService
 
@@ -36,6 +36,7 @@ async def create_pressplay_job(
     guest_session_id: uuid.UUID,
     webhook_url: str | None = None,
     vertical: BrandVertical = BrandVertical.EVENTS,
+    client_ip: str | None = None,
 ) -> JobRecord:
     yt = YouTubeService(settings)
     url = yt.validate_url(youtube_url)
@@ -56,6 +57,8 @@ async def create_pressplay_job(
         vertical=vertical,
     )
     schedule_pipeline(job.id)
+    if client_ip:
+        await record_job_creation_limits(guest_session_id, client_ip, settings)
     return job
 
 

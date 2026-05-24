@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
+from app.api.deps import check_concurrent_cap, check_rate_limit, get_client_ip, verify_demo_secret
 from app.api.job_ids import parse_job_id
 from app.services.abuse_guard import check_honeypot
 from app.api.deps_guest import get_guest_id
@@ -55,6 +55,7 @@ async def create_job(
             settings=settings,
             guest_session_id=get_guest_id(request),
             vertical=brand_vertical,
+            client_ip=get_client_ip(request),
         )
 
         return _templates(request).TemplateResponse(

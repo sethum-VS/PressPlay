@@ -157,10 +157,11 @@
 <script>
   (function () {
     const defaults = htmx.config.responseHandling;
+    const base = Array.isArray(defaults) ? defaults : [];
     htmx.config.responseHandling = [
-      { code: '400', swap: true },
-      { code: '429', swap: true },
-      ...defaults,
+      { code: '400', swap: true, error: false },
+      { code: '429', swap: true, error: false },
+      ...base,
     ];
   })();
 

@@ -29,7 +29,9 @@ def test_in_memory_guest_and_ip_limits():
     ip = "203.0.113.1"
 
     guard.check(guest, ip)
+    guard.record(guest, ip)
     guard.check(guest, ip)
+    guard.record(guest, ip)
     with pytest.raises(RateLimitError, match="Rate limit exceeded"):
         guard.check(guest, ip)
 
@@ -45,5 +47,6 @@ def test_in_memory_cooldown():
     ip = "203.0.113.2"
 
     guard.check(guest, ip)
+    guard.record(guest, ip)
     with pytest.raises(RateLimitError, match="wait a few minutes"):
         guard.check(guest, ip)
