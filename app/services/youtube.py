@@ -12,6 +12,14 @@ import yt_dlp
 from app.config import Settings, get_settings
 from app.domain.errors import DownloadError, ValidationError
 from app.domain.models import ProcessingMode
+from app.services.youtube_download.providers import (
+    DownloadProvider,
+    fetch_via_apify,
+    fetch_via_rapidapi,
+    is_bot_block_message,
+    missing_fallback_config_message,
+    resolve_provider_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +150,114 @@ class YouTubeService:
         quick_minutes: int | None,
     ) -> VideoDownloadResult:
         job_dir = self.job_dir(job_id)
-        raw_template = str(job_dir / "source.%(ext)s")
         max_seconds = self._target_seconds(mode, quick_minutes)
-        section = self._section_spec(max_seconds)
+        output = job_dir / "video.mp4"
+        chain = resolve_provider_chain(self.settings)
+        errors: list[str] = []
+        title = ""
 
+        for provider in chain:
+            try:
+                if provider == DownloadProvider.YTDLP:
+                    source, title = self._download_ytdlp(
+                        job_dir, url, mode, quick_minutes, max_seconds
+                    )
+                    self._trim_to_mp4(source, output, max_seconds)
+                    if source != output and source.exists():
+                        try:
+                            source.unlink()
+                        except OSError:
+                            logger.warning(
+                                "Could not remove intermediate download %s", source
+                            )
+                elif provider == DownloadProvider.RAPIDAPI:
+                    title = self._download_external(
+                        url,
+                        job_dir / "source.mp4",
+                        provider,
+                        max_seconds,
+                    )
+                    self._trim_to_mp4(job_dir / "source.mp4", output, max_seconds)
+                elif provider == DownloadProvider.APIFY:
+                    title = self._download_external(
+                        url,
+                        job_dir / "source.mp4",
+                        provider,
+                        max_seconds,
+                    )
+                    self._trim_to_mp4(job_dir / "source.mp4", output, max_seconds)
+                else:
+                    continue
+                return VideoDownloadResult(
+                    job_id=job_id,
+                    video_path=output,
+                    title=title,
+                    source_url=url,
+                )
+            except DownloadError as exc:
+                errors.append(str(exc))
+                if provider == DownloadProvider.YTDLP and not self._should_try_fallback(
+                    str(exc)
+                ):
+                    raise
+            except Exception as exc:
+                errors.append(f"{provider.value}: {exc}")
+                logger.warning(
+                    "YouTube download via %s failed for %s: %s", provider.value, url, exc
+                )
+
+        if errors and is_bot_block_message(errors[0]):
+            if not self.settings.rapidapi_key.strip() and not self.settings.apify_api_token.strip():
+                raise DownloadError(missing_fallback_config_message(self.settings))
+            raise DownloadError(
+                "YouTube blocked direct download from this server. "
+                "External download providers also failed. "
+                f"{errors[-1][:200]}"
+            )
+        detail = errors[-1] if errors else "YouTube download failed."
+        raise DownloadError(detail[:400])
+
+    def _should_try_fallback(self, message: str) -> bool:
+        lowered = message.lower()
+        blocked = is_bot_block_message(lowered) or "cloud ips" in lowered
+        if not blocked:
+            return False
+        return len(resolve_provider_chain(self.settings)) > 1
+
+    def _download_external(
+        self,
+        url: str,
+        dest: Path,
+        provider: DownloadProvider,
+        max_seconds: int,
+    ) -> str:
+        max_bytes = max_seconds * 2_000_000
+        if provider == DownloadProvider.RAPIDAPI:
+            key = self.settings.rapidapi_key.strip()
+            if not key:
+                raise DownloadError(
+                    "RAPIDAPI_KEY is not configured for YouTube download fallback."
+                )
+            return fetch_via_rapidapi(url, dest, key, max_bytes=max_bytes)
+        if provider == DownloadProvider.APIFY:
+            token = self.settings.apify_api_token.strip()
+            if not token:
+                raise DownloadError(
+                    "APIFY_API_TOKEN is not configured for YouTube download fallback."
+                )
+            return fetch_via_apify(url, dest, token, max_bytes=max_bytes)
+        raise DownloadError(f"Unknown download provider: {provider.value}")
+
+    def _download_ytdlp(
+        self,
+        job_dir: Path,
+        url: str,
+        mode: ProcessingMode,
+        quick_minutes: int | None,
+        max_seconds: int,
+    ) -> tuple[Path, str]:
+        raw_template = str(job_dir / "source.%(ext)s")
+        section = self._section_spec(max_seconds)
         ydl_opts: dict = {
             **self._base_ydl_opts(),
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
@@ -167,25 +279,10 @@ class YouTubeService:
         if source is None:
             raise DownloadError("Download finished but no video file was found.")
 
-        output = job_dir / "video.mp4"
-        self._trim_to_mp4(source, output, max_seconds)
-
         title = ""
         if info:
             title = str(info.get("title") or "").strip()
-
-        if source != output and source.exists():
-            try:
-                source.unlink()
-            except OSError:
-                logger.warning("Could not remove intermediate download %s", source)
-
-        return VideoDownloadResult(
-            job_id=job_id,
-            video_path=output,
-            title=title,
-            source_url=url,
-        )
+        return source, title
 
     def _target_seconds(self, mode: ProcessingMode, quick_minutes: int | None) -> int:
         if mode == ProcessingMode.QUICK:
@@ -268,20 +365,9 @@ class YouTubeService:
             return "Age-restricted videos cannot be downloaded without sign-in (not supported in v1)."
         if "copyright" in text or "blocked" in text:
             return "This video cannot be downloaded due to platform restrictions."
-        if any(
-            phrase in text
-            for phrase in (
-                "not a bot",
-                "confirm you're",
-                "confirm you’re",
-                "unusual traffic",
-                "captcha",
-            )
-        ):
+        if is_bot_block_message(text):
             return (
-                "YouTube blocked automated download from this server (common on cloud IPs). "
-                "Try again later, pick another public video, or run PressPlay locally. "
-                "Sign-in and cookies are not supported in v1."
+                "YouTube blocked automated download from this server (common on cloud IPs)."
             )
         if any(
             phrase in text

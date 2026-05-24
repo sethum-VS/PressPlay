@@ -9,7 +9,6 @@ def test_map_bot_block_message():
     )
     msg = YouTubeService._map_download_error(exc)
     assert "cloud IPs" in msg
-    assert "not supported in v1" in msg
 
 
 def test_map_private_video():

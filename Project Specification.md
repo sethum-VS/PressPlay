@@ -4,6 +4,7 @@
 
 | Date | Summary |
 |------|---------|
+| **2026-05-25 (d)** | **YouTube ingest fallback:** `app/services/youtube_download/providers.py` — `YOUTUBE_DOWNLOAD_PROVIDER` (`ytdlp` \| `rapidapi` \| `apify` \| `auto`); RapidAPI [YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) MP4 link fetch + stream; optional Apify `tazy/youtube-converter`; provider chain in `YouTubeService` with bot-block detection before fallback. **`deploy.yml`:** `YOUTUBE_DOWNLOAD_PROVIDER=auto`; `RAPIDAPI_KEY` via Secret Manager (`pressplay-rapidapi-key`) — operator setup in `docs/DEPLOY_GCP.md`. **UI:** HTMX `responseHandling` swaps **400** / **429** (rate limit, concurrent cap) into `#job-area`; loading state + `aria-hidden` on `#loading-state`. **Tests:** `tests/test_youtube_download_providers.py`. |
 | **2026-05-25 (c)** | **Reliability + Cloud Run ops:** `scripts/migrate_with_retry.sh` on container start (Alembic retries until Cloud SQL ready); `wait_for_db_connection()` in app lifespan. **YouTube on datacenter IPs:** Deno in `Dockerfile` for yt-dlp JS; `player_client` `android`/`web`; bot/sign-in errors mapped to clear job failures; **no cookies/sign-in in v1**. **API:** `app/api/job_ids.py` — malformed job UUID → **404**; **`HEAD /`** for probes; webhooks on **ingest failures** (`DownloadError`, `MemvidError`). **Image:** `COPY config/` brand packs. **UI:** HTMX clears stuck loading state after job partial swap. Production abuse limits **5 / 12 / 90s** in `deploy.yml`. |
 | **2026-05-25 (b)** | **Open production:** Cloud Run deploy no longer mounts `PRESSPLAY_DEMO_SECRET` (public HTTPS, no shared password). **Abuse controls** in `app/services/abuse_guard.py` — per `(guest_session_id, client_ip)` hourly cap, per-IP hourly cap, minimum seconds between jobs, global concurrent cap, HTMX honeypot (`website` field). Production limits in `deploy.yml` (`RATE_LIMIT_PER_HOUR=5`, `RATE_LIMIT_PER_IP_PER_HOUR=12`, `RATE_LIMIT_MIN_INTERVAL_SECONDS=90`). **`technical`** vertical + `config/brand-technical.yaml` (UI label **Technical Event**). |
 | **2026-05-25 (a)** | **GCP production deploy:** **Cloud Run** (`pressplay`, HTTPS `*.run.app`, scale-to-zero) + **Cloud SQL** (`pressplay-db`); **Secret Manager** (`pressplay-session-secret`, `pressplay-database-url`, `pressplay-db-password`); **GitHub CI/CD** (`.github/workflows/deploy.yml` after `ci.yml`, WIF → Artifact Registry → Cloud Run); bootstrap `scripts/gcp-cloudrun-bootstrap.sh`; ops doc `docs/DEPLOY_GCP.md`; `.gitignore` hardening (`secrets/gcp-sa.json`, `cloud-sql-proxy*`, `data/temp/`). Legacy GCE VM (`pressplay-vm`, `docker-compose.prod.yml`) superseded — firewall `allow-pressplay-8000` removed. Local: `.env` uses literal `SESSION_SECRET` (not shell substitution). |
@@ -50,7 +51,7 @@
 | Production deploy | **Cloud Run** + **Cloud SQL** + **Secret Manager**; CI via `.github/workflows/deploy.yml` (WIF `github-actions-deployer`); see `docs/DEPLOY_GCP.md` |
 | Public access (prod) | **Open** — no shared password on Cloud Run. Optional **`PRESSPLAY_DEMO_SECRET`** for private demos only (local or manual secret mount); not used by CI deploy |
 | Abuse controls (prod) | **`app/services/abuse_guard.py`** — per guest+IP hourly cap, per-IP hourly cap (limits cookie cycling), submission cooldown, honeypot on HTMX form; **`MAX_CONCURRENT_JOBS=2`** global. See §10–§11 |
-| Video context | **Real yt-dlp + ffmpeg** download/trim; **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context`. **Cloud Run:** Deno in image for yt-dlp; YouTube `player_client` `android` + `web` (no browser cookies in v1); datacenter IPs may hit bot/sign-in blocks — see §11 |
+| Video context | **Real yt-dlp + ffmpeg** download/trim (optional **RapidAPI/Apify** fallback on cloud IPs); **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context`. **Cloud Run:** Deno in image for yt-dlp; `YOUTUBE_DOWNLOAD_PROVIDER=auto` + `RAPIDAPI_KEY` recommended — see §11 |
 | Agent orchestration | **Thin `PipelineRunner`** — `WatcherAgent` → `StrategistAgent` → `WriterAgent` → `EditorLinter` (rule-based, non-blocking) → `GraphifyService`; pitch as CrewAI-style, no CrewAI library |
 | Mapper | **`GraphifyService`** — subprocess `graphify extract` when LLM keys available; **heuristic** graph fallback otherwise |
 | Graph UI | **D3.js** (`app/static/js/graph.js`) — `graph.json` embedded in `newsroom.html` |
@@ -162,7 +163,7 @@ flowchart TB
 ### 5.1 Pipeline steps
 
 1. **Ingestion:** User submits YouTube URL + mode on index. HTMX `POST /api/jobs` creates job; progress partial polls until `done`.
-2. **Download:** `YouTubeService` validates YouTube URL, downloads via **yt-dlp** (`_base_ydl_opts`: retries, `player_client` `android`/`web` for server IPs), trims with **ffmpeg** (Quick window or Full up to 1h). Skipped when `PRESSPLAY_USE_MOCK=1`. **Cloud/datacenter IPs** (Cloud Run) may be blocked by YouTube (“not a bot”, sign-in); v1 has **no cookie/account flow** — user-facing `DownloadError` text explains workarounds (other video, retry, run locally).
+2. **Download:** `YouTubeService` validates YouTube URL, downloads via **yt-dlp** (`_base_ydl_opts`: retries, `player_client` `android`/`web` for server IPs) or **external fallback** when configured (`YOUTUBE_DOWNLOAD_PROVIDER=auto` + `RAPIDAPI_KEY` and/or `APIFY_API_TOKEN` — RapidAPI [YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast), optional Apify `tazy/youtube-converter`), then trims with **ffmpeg** (Quick window or Full up to 1h). Skipped when `PRESSPLAY_USE_MOCK=1`. **Cloud/datacenter IPs** (Cloud Run) may block yt-dlp (“not a bot”, sign-in); v1 has **no cookie/account flow** — configure RapidAPI on Cloud Run or run locally.
 3. **Context extraction:** `MemvidService` runs **`memvid put`** on local file → **unified_context** (Whisper transcript + visual search snippets). Temp video deleted after ingest. Full mock uses `extract_context_stub`.
 4. **Watcher:** `WatcherAgent` → `generate_structured(..., WatcherOutput)` — summary + timestamped **claims**; claim normalization (`_normalize_claims`); **retry** once if claims empty but summary non-empty; warning logs.
 5. **Strategist:** `StrategistAgent` → `StrategistOutput` — editorial brief (angle, audience, thread hook, omit topics) from summary + claims; optional vertical hint in prompt (API accepts `vertical`; pipeline may omit — see §7.2).
@@ -210,7 +211,8 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | Editorial: save, workflow, partial regen | **Shipped** | `/newsroom/{id}/save`, `/api/jobs/{id}/regenerate` |
 | Watcher claims + `claims.json` | **Shipped** | Citations on newsroom with jump links |
 | `GET /health` | **Shipped** | Liveness for Docker / Cloud Run |
-| YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1`; Cloud Run mitigations + bot/sign-in error mapping |
+| YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1`; `player_client` `android`/`web`; optional RapidAPI/Apify fallback (`auto` + keys); bot/sign-in error mapping |
+| YouTube external download (`youtube_download/`) | **Shipped** | RapidAPI POST → MP4 URL → httpx stream; Apify actor optional; no cookies in v1 |
 | Job ID validation (`job_ids.py`) | **Shipped** | Malformed UUID on poll/export → **404** (not 500) |
 | `HEAD /` | **Shipped** | `200` empty body for uptime probes |
 | Cold start (DB + migrations) | **Shipped** | `migrate_with_retry.sh`; `wait_for_db_connection` in lifespan |
@@ -475,7 +477,9 @@ pressplay/
 │   │   ├── webhooks.py
 │   │   ├── export.py
 │   │   ├── brand.py
-│   │   ├── youtube.py
+│   │   ├── youtube.py            # provider chain → yt-dlp or external fallback
+│   │   ├── youtube_download/
+│   │   │   └── providers.py      # RapidAPI, Apify, resolve_provider_chain
 │   │   ├── memvid.py
 │   │   ├── graphify.py
 │   │   ├── results_repo.py       # filesystem persistence (legacy dev)
@@ -525,7 +529,8 @@ pressplay/
 │   ├── test_job_ids.py
 │   ├── test_index_head.py
 │   ├── test_youtube.py
-│   └── test_youtube_errors.py
+│   ├── test_youtube_errors.py
+│   └── test_youtube_download_providers.py
 ├── .github/workflows/
 │   ├── ci.yml                    # pytest + Alembic on PR/push to main
 │   └── deploy.yml                # Cloud Run deploy after CI on main
@@ -569,6 +574,9 @@ pressplay/
 | `SESSION_SECRET` (production) | Secret Manager | `pressplay-session-secret` — not in `.env` on Cloud Run |
 | `DATABASE_URL` (production) | Secret Manager | `pressplay-database-url` — Cloud SQL unix socket (`/cloudsql/...`) |
 | `GRAPHIFY_BIN` | *(auto)* | Override path to `graphify` binary |
+| `YOUTUBE_DOWNLOAD_PROVIDER` | `ytdlp` | `ytdlp` \| `rapidapi` \| `apify` \| `auto` (yt-dlp then configured fallbacks) |
+| `RAPIDAPI_KEY` | *(unset)* | RapidAPI key for skdeveloper YouTube Video Downloader Fast (Cloud Run Secret Manager) |
+| `APIFY_API_TOKEN` | *(unset)* | Optional Apify token for `tazy/youtube-converter` |
 | `GEMINI_API_KEY` | *(optional)* | For Graphify CLI `--backend gemini`; not required for Vertex Watcher/Writer |
 | `DATABASE_URL` | *(unset = FS dev)* | `postgresql+asyncpg://...` → Postgres jobs, press kits, guest sessions |
 | `SESSION_SECRET` | *(required in compose / .env)* | Cookie signing; use literal hex from `openssl rand -hex 32` in `.env` (no shell `$(...)` in file) |
@@ -620,10 +628,10 @@ See `README.md` for command examples.
 ## 11. Guardrails & Error Handling
 
 - **YouTube only** — reject non-YouTube URLs; handle private/unavailable/live-not-ready with clear HTMX error partials.
-- **YouTube on cloud IPs** — Cloud Run/datacenter egress often triggers “confirm you're not a bot” or sign-in challenges. v1: **no cookies or account sign-in**; app uses `android`/`web` `player_client`, Deno in the container image, and maps failures to actionable job errors. **Workarounds:** another public video, retry later, or run PressPlay locally (residential IP). See `docs/DEPLOY_GCP.md` § YouTube downloads on Cloud Run.
+- **YouTube on cloud IPs** — Cloud Run/datacenter egress often triggers “confirm you're not a bot” or sign-in challenges. v1: **no cookies or account sign-in**; production should set `YOUTUBE_DOWNLOAD_PROVIDER=auto` and `RAPIDAPI_KEY` (Secret Manager) so yt-dlp failures fall back to RapidAPI MP4 links, then ffmpeg trim as usual. Optional `APIFY_API_TOKEN` for Apify actor `tazy/youtube-converter`. Without keys, job errors explain configuration or local `./run.sh`. See `docs/DEPLOY_GCP.md` § YouTube downloads on Cloud Run.
 - **Malformed job IDs** — non-UUID `job_id` path segments → **404** via `parse_job_id()` (HTMX poll and v1 JSON/export).
-- **Concurrent cap** — max 2 active pipelines globally (`DbJobStore.active_count_async` when Postgres enabled).
-- **Rate limits** — `enforce_job_creation_limits()` (`app/services/abuse_guard.py`): per `(guest_session_id, client_ip)` hourly cap, per-IP hourly cap, and minimum interval between jobs from the same IP. Returns **429** with user-facing messages.
+- **Concurrent cap** — max 2 active pipelines globally (`DbJobStore.active_count_async` when Postgres enabled); busy submissions return **400** (“Server is busy…”); HTMX swaps 400 body into `#job-area` (§13.1).
+- **Rate limits** — `enforce_job_creation_limits()` (`app/services/abuse_guard.py`): per `(guest_session_id, client_ip)` hourly cap, per-IP hourly cap, and minimum interval between jobs from the same IP. Returns **429** with user-facing messages; HTMX index swaps 429 body into `#job-area` (§13.1).
 - **Honeypot** — HTMX `POST /api/jobs` rejects non-empty hidden `website` field.
 - **Optional demo secret** — when `PRESSPLAY_DEMO_SECRET` is set only (not production default).
 - **Guest ownership** — cross-guest access to jobs/newsrooms returns **404** (not 403).
@@ -658,8 +666,9 @@ See `README.md` for command examples.
 | `pressplay-session-secret` | `SESSION_SECRET` |
 | `pressplay-database-url` | `DATABASE_URL` (asyncpg + `/cloudsql/PROJECT:REGION:pressplay-db`) |
 | `pressplay-db-password` | Used when building `pressplay-database-url` |
+| `pressplay-rapidapi-key` *(optional)* | `RAPIDAPI_KEY` — YouTube download fallback on datacenter IPs |
 
-**Cloud Run env (not secrets):** `GCP_PROJECT_ID`, `GCP_LOCATION`, `DEBUG=false`, plus abuse limits — see §10 production table.
+**Cloud Run env (not secrets):** `GCP_PROJECT_ID`, `GCP_LOCATION`, `DEBUG=false`, `YOUTUBE_DOWNLOAD_PROVIDER=auto`, plus abuse limits — see §10 production table.
 
 **CI/CD:** Push to `main` → `ci.yml` (pytest) → `deploy.yml` (build/push image, Cloud Run start command runs `scripts/migrate_with_retry.sh` then `uvicorn`, `gcloud run deploy`, print HTTPS URL and abuse-limit summary in job log).
 
@@ -729,7 +738,9 @@ services:
 - **Content vertical** select: `events` (default, “General event”) \| `technical` (“Technical Event”) \| `sports` \| `corp`
 - Mode toggle: **Quick** / **Full**
 - Quick mode: duration control (**5–20 min**, default 10)
-- Submit → HTMX `hx-post="/api/jobs"` → `partials/job_progress.html` (script clears `#loading-state` `htmx-request` after swap so the button does not stay disabled)
+- Submit → HTMX `hx-post="/api/jobs"` → `partials/job_progress.html` or error partial
+- **HTMX error swap:** `htmx.config.responseHandling` registers `{ code: '400', swap: true }` and `{ code: '429', swap: true }` so rate-limit / validation / “server busy” responses render in `#job-area` (default HTMX ignores 4xx bodies)
+- **Loading state:** script clears `#loading-state` `htmx-request` on `htmx:afterRequest` / `htmx:afterSwap`; sets `aria-hidden` when idle
 - Poll `GET /api/jobs/{id}` (`hx-trigger="every 2s"`) until `done` → link to `/newsroom/{id}`
 - **Your recent press kits** from `list_recent(guest_session_id)` (guest-scoped)
 - Optional banner: guest session expiry (`guest_expires`, `guest_session_days`)
@@ -863,11 +874,14 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 - [x] **Technical Event vertical** — `BrandVertical.technical`, `config/brand-technical.yaml`, index select option
 - [x] **Cloud Run cold start** — `migrate_with_retry.sh`, `wait_for_db_connection`, Dockerfile `COPY config/`
 - [x] **YouTube + Cloud Run** — Deno, `player_client`, datacenter IP error mapping; no cookies in v1
+- [x] **YouTube RapidAPI/Apify fallback** — `youtube_download/providers.py`, `YOUTUBE_DOWNLOAD_PROVIDER=auto`, `tests/test_youtube_download_providers.py`
+- [x] **HTMX 400/429 error swap** — index `responseHandling` + loading `aria-hidden`
 - [x] **API hardening** — `job_ids.py` (404 on bad UUID), `HEAD /`, webhooks on ingest failure
 - [x] **`brand_banned_phrases` / `brand_max_tweet_chars`** — restored in `app/services/brand.py` for EditorLinter
 
 ### Still open / blockers
 
+- [ ] **`RAPIDAPI_KEY` on Cloud Run** — create `pressplay-rapidapi-key` in Secret Manager and append to `deploy.yml` `--set-secrets` (see `docs/DEPLOY_GCP.md` § YouTube downloads on Cloud Run); without it, `auto` still runs yt-dlp only
 - [ ] **Memvid + Whisper on demo machine** — verify `memvid models install whisper-small` after deploy; Docker build only best-effort
 - [ ] **`GEMINI_API_KEY` for Graphify CLI** (optional) — heuristic graph acceptable when unset
 - [ ] **Delete legacy VM** — `pressplay-vm` optional cost cleanup after verifying Cloud Run

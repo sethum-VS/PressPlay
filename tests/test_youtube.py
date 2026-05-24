@@ -7,7 +7,7 @@ def test_map_download_error_sign_in_phrases() -> None:
     msg = YouTubeService._map_download_error(
         Exception("ERROR: Sign in to confirm you're not a bot")
     )
-    assert "sign-in" in msg.lower()
+    assert "cloud IPs" in msg
 
 
 def test_map_download_error_does_not_false_positive_on_login_substring() -> None:

@@ -39,7 +39,7 @@ PressPlay is **not** a generic “paste YouTube into ChatGPT” summarizer. It i
 ## How it works
 
 ```text
-YouTube URL  →  yt-dlp + ffmpeg  →  Memvid (transcript + visuals)
+YouTube URL  →  yt-dlp (or RapidAPI/Apify on cloud) + ffmpeg  →  Memvid (transcript + visuals)
        →  Watcher (facts + claims)  →  Writer (blog + thread)
        →  Graphify (entities)  →  /newsroom/{id}  (draft by default)
 ```
@@ -142,6 +142,9 @@ chmod +x scripts/smoke_mvp.sh
 | `RATE_LIMIT_MIN_INTERVAL_SECONDS` | Cooldown between jobs from same IP (default 60) |
 | `PRESSPLAY_INSTALL_WHISPER=1` | `./run.sh` runs `memvid models install whisper-small` |
 | `GRAPHIFY_BIN` | Override path to `graphify` CLI |
+| `YOUTUBE_DOWNLOAD_PROVIDER` | `ytdlp` locally; use `auto` on Cloud Run with `RAPIDAPI_KEY` |
+| `RAPIDAPI_KEY` | [YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) — bypasses datacenter IP blocks |
+| `APIFY_API_TOKEN` | Optional second fallback (Apify `tazy/youtube-converter`) |
 | `DATABASE_URL` | Postgres async URL (required for MVP deploy) |
 | `SESSION_SECRET` | Cookie signing secret (required in Docker compose) |
 | `GUEST_SESSION_TTL_DAYS` | Guest session lifetime (default `30`) |

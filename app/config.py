@@ -35,6 +35,11 @@ class Settings(BaseSettings):
     graphify_bin: str = ""
     pressplay_use_mock: str = ""
 
+    # YouTube ingest: ytdlp | rapidapi | apify | auto (ytdlp then configured fallbacks)
+    youtube_download_provider: str = "ytdlp"
+    rapidapi_key: str = ""
+    apify_api_token: str = ""
+
     # Postgres + guest sessions
     database_url: str = ""
     session_secret: str = ""

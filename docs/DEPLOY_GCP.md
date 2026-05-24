@@ -23,6 +23,7 @@ The legacy GCE VM path (`docker-compose.prod.yml`, port `:8000`) is retained for
 | `pressplay-session-secret` | `SESSION_SECRET` |
 | `pressplay-database-url` | `DATABASE_URL` (Cloud SQL unix socket) |
 | `pressplay-db-password` | *(used to build `pressplay-database-url`)* |
+| `pressplay-rapidapi-key` *(optional)* | `RAPIDAPI_KEY` — YouTube download fallback on datacenter IPs |
 
 Production is **open** (no shared password). Abuse protection is enforced in-app and via Cloud Run env (see below).
 
@@ -131,6 +132,33 @@ For a fresh demo, bootstrap creates an empty Cloud SQL database; Alembic runs on
 
 ## YouTube downloads on Cloud Run
 
-PressPlay uses **yt-dlp** without browser cookies. YouTube often blocks **datacenter IPs** (including Cloud Run) with “confirm you're not a bot” / sign-in challenges. The app maps those failures to a clear job error in the UI; there is no cookie or account sign-in flow in v1.
+PressPlay uses **yt-dlp** without browser cookies. YouTube often blocks **datacenter IPs** (including Cloud Run) with “confirm you're not a bot” / sign-in challenges. There is no cookie or account sign-in flow in v1.
 
-**Mitigations in-app:** alternate YouTube player clients (`android`, `web`), retries, and user-facing error text. **Workarounds:** try another public video, retry later, or run locally (`./run.sh`) where residential IP success rates are higher.
+**Recommended production fallback:** subscribe to [YouTube Video Downloader Fast on RapidAPI](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast), store the key in Secret Manager, and deploy with external download enabled.
+
+```bash
+# One-time: create secret (replace with your RapidAPI key)
+echo -n 'YOUR_RAPIDAPI_KEY' | gcloud secrets create pressplay-rapidapi-key \
+  --project=PROJECT_ID --data-file=-
+
+# Grant runtime SA access
+gcloud secrets add-iam-policy-binding pressplay-rapidapi-key \
+  --project=PROJECT_ID \
+  --member="serviceAccount:pressplay-runtime@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```
+
+Add to `gcloud run deploy` (or extend `.github/workflows/deploy.yml`):
+
+- `--set-secrets=RAPIDAPI_KEY=pressplay-rapidapi-key:latest` (append to existing `--set-secrets`)
+- `--set-env-vars=...,YOUTUBE_DOWNLOAD_PROVIDER=auto`
+
+| Env var | Cloud Run value | Purpose |
+|---------|-----------------|--------|
+| `YOUTUBE_DOWNLOAD_PROVIDER` | `auto` | Try yt-dlp first; on bot/sign-in blocks use RapidAPI (and Apify if configured) |
+| `RAPIDAPI_KEY` | Secret Manager | [skdeveloper YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) |
+| `APIFY_API_TOKEN` | *(optional secret)* | Second fallback via Apify actor `tazy/youtube-converter` |
+
+**Local dev:** leave `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp` (default) so residential IPs keep using yt-dlp only.
+
+**Without `RAPIDAPI_KEY`:** bot blocks still surface a clear job error suggesting configuration or running locally (`./run.sh`).

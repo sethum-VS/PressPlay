@@ -121,7 +121,7 @@
 
 <div id="job-area" class="w-full max-w-3xl mx-auto"></div>
 
-<div class="htmx-indicator flex-col items-center justify-center py-section gap-lg max-w-3xl mx-auto" id="loading-state">
+<div class="htmx-indicator flex-col items-center justify-center py-section gap-lg max-w-3xl mx-auto" id="loading-state" aria-hidden="true">
   <div class="relative w-16 h-16 flex items-center justify-center">
     <div class="absolute inset-0 rounded-full border-2 border-primary/20 pulse-ring"></div>
     <div class="absolute inset-2 rounded-full border-2 border-t-primary border-r-primary border-b-transparent border-l-transparent animate-spin"></div>
@@ -155,16 +155,47 @@
 
 {% block scripts %}
 <script>
+  (function () {
+    const defaults = htmx.config.responseHandling;
+    htmx.config.responseHandling = [
+      { code: '400', swap: true },
+      { code: '429', swap: true },
+      ...defaults,
+    ];
+  })();
+
+  function clearJobLoading() {
+    const loading = document.getElementById('loading-state');
+    loading?.classList.remove('htmx-request');
+    loading?.setAttribute('aria-hidden', 'true');
+  }
+
+  function showJobLoading() {
+    document.getElementById('loading-state')?.setAttribute('aria-hidden', 'false');
+  }
+
   document.querySelectorAll('input[name="mode"]').forEach((radio) => {
     radio.addEventListener('change', () => {
       const wrap = document.getElementById('quick-minutes-wrap');
       wrap.style.display = document.querySelector('input[name="mode"]:checked').value === 'quick' ? 'flex' : 'none';
     });
   });
+
+  document.body.addEventListener('htmx:beforeRequest', (event) => {
+    if (event.detail.elt?.matches?.('form[hx-post="/api/jobs"]')) {
+      showJobLoading();
+    }
+  });
+
+  document.body.addEventListener('htmx:afterRequest', (event) => {
+    if (event.detail.elt?.matches?.('form[hx-post="/api/jobs"]')) {
+      clearJobLoading();
+    }
+  });
+
   document.body.addEventListener('htmx:afterSwap', (event) => {
     if (event.detail.target?.id === 'job-area' && event.detail.target.innerHTML.trim()) {
-      const loading = document.getElementById('loading-state');
-      loading?.classList.remove('htmx-request');
+      clearJobLoading();
     }
   });
 </script>
