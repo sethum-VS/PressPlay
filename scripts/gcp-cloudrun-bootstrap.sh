@@ -50,7 +50,7 @@ for role in roles/aiplatform.user roles/cloudsql.client roles/secretmanager.secr
 done
 
 info "Secret Manager..."
-for secret in pressplay-session-secret pressplay-db-password pressplay-demo-secret; do
+for secret in pressplay-session-secret pressplay-db-password; do
   if ! gcloud secrets describe "$secret" --project="$PROJECT_ID" >/dev/null 2>&1; then
     if [[ "$secret" == pressplay-db-password ]]; then
       openssl rand -hex 16 | gcloud secrets create "$secret" --data-file=- --replication-policy=automatic --project="$PROJECT_ID"
@@ -172,13 +172,11 @@ gcloud run deploy "$SERVICE" \
   --memory=4Gi \
   --timeout=3600 \
   --port=8000 \
-  --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest,PRESSPLAY_DEMO_SECRET=pressplay-demo-secret:latest" \
-  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},DEBUG=false" \
+  --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest" \
+  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=3,RATE_LIMIT_PER_IP_PER_HOUR=8,RATE_LIMIT_MIN_INTERVAL_SECONDS=120,MAX_CONCURRENT_JOBS=2" \
   --quiet
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')"
 info ""
 info "PressPlay HTTPS URL: $URL"
-info "Demo gate: use secret from Secret Manager (pressplay-demo-secret):"
-info "  gcloud secrets versions access latest --secret=pressplay-demo-secret --project=$PROJECT_ID"
-info "Submit jobs with form field secret=... or header X-PressPlay-Secret"
+info "Open access — abuse limits: 3 jobs/hr per session, 8/hr per IP, 120s cooldown, max 2 concurrent"

@@ -22,6 +22,8 @@ class Settings(BaseSettings):
 
     max_concurrent_jobs: int = 2
     rate_limit_per_hour: int = 5
+    rate_limit_per_ip_per_hour: int = 10
+    rate_limit_min_interval_seconds: int = 60
     quick_minutes_default: int = 10
     quick_minutes_min: int = 5
     quick_minutes_max: int = 20

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
+from app.services.abuse_guard import check_honeypot
 from app.api.deps_guest import get_guest_id
 from app.api.job_creation import (
     create_pressplay_job,
@@ -34,10 +35,12 @@ async def create_job(
     quick_minutes: int | None = Form(None),
     vertical: str = Form("events"),
     secret: str | None = Form(None),
+    website: str | None = Form(None),
 ):
     settings = get_settings()
 
     try:
+        check_honeypot(website)
         verify_demo_secret(secret)
         await check_rate_limit(request, settings)
         await check_concurrent_cap(settings)

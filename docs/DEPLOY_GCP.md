@@ -22,18 +22,21 @@ The legacy GCE VM path (`docker-compose.prod.yml`, port `:8000`) is retained for
 |--------|----------------------|
 | `pressplay-session-secret` | `SESSION_SECRET` |
 | `pressplay-database-url` | `DATABASE_URL` (Cloud SQL unix socket) |
-| `pressplay-demo-secret` | `PRESSPLAY_DEMO_SECRET` (demo gate) |
 | `pressplay-db-password` | *(used to build `pressplay-database-url`)* |
 
-**Demo gate:** When `PRESSPLAY_DEMO_SECRET` is set, job creation requires form field `secret` or header `X-PressPlay-Secret`. Share the value with demo viewers only.
+Production is **open** (no shared password). Abuse protection is enforced in-app and via Cloud Run env (see below).
 
-Retrieve the demo secret:
+### Abuse limits (Cloud Run defaults)
 
-```bash
-gcloud secrets versions access latest \
-  --secret=pressplay-demo-secret \
-  --project=project-3bb9c91c-69ed-4507-998
-```
+| Control | Production value | Env var |
+|---------|------------------|---------|
+| Per guest session + IP | 3 jobs / hour | `RATE_LIMIT_PER_HOUR` |
+| Per IP (all sessions) | 8 jobs / hour | `RATE_LIMIT_PER_IP_PER_HOUR` |
+| Cooldown between jobs | 120 seconds | `RATE_LIMIT_MIN_INTERVAL_SECONDS` |
+| Global concurrent pipelines | 2 | `MAX_CONCURRENT_JOBS` |
+| Bot honeypot | Hidden `website` field on form | *(always on for HTMX)* |
+
+Tune limits in `.github/workflows/deploy.yml` (`--set-env-vars`) and redeploy. Optional `PRESSPLAY_DEMO_SECRET` remains available for private demos if you mount it manually.
 
 One-time bootstrap (Cloud SQL + IAM + firewall cleanup + optional first deploy):
 
@@ -106,13 +109,6 @@ URL=$(gcloud run services describe pressplay --region=us-central1 \
   --project=project-3bb9c91c-69ed-4507-998 --format='value(status.url)')
 curl -s "${URL}/health/ready"
 ./scripts/smoke_mvp.sh "${URL}"
-```
-
-With demo gate enabled, pass the secret:
-
-```bash
-SECRET=$(gcloud secrets versions access latest --secret=pressplay-demo-secret --project=project-3bb9c91c-69ed-4507-998)
-curl -s -H "X-PressPlay-Secret: ${SECRET}" "${URL}/"
 ```
 
 ## Security notes

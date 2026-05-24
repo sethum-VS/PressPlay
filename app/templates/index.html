@@ -100,6 +100,11 @@
     </div>
     {% endif %}
 
+    <div class="absolute -left-[9999px] w-px h-px overflow-hidden" aria-hidden="true">
+      <label for="website">Leave blank</label>
+      <input id="website" name="website" type="text" tabindex="-1" autocomplete="off" value="">
+    </div>
+
     <div class="flex flex-col items-center gap-md w-full">
       <button type="submit" class="bg-primary text-on-primary font-button text-button px-[18px] py-[10px] rounded hover:bg-primary-active transition-colors w-full md:w-auto min-w-[200px] flex items-center justify-center gap-2">
         <span class="material-symbols-outlined text-sm">auto_awesome</span>

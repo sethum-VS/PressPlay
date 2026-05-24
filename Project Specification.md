@@ -4,6 +4,7 @@
 
 | Date | Summary |
 |------|---------|
+| **2026-05-25** | **GCP production deploy:** **Cloud Run** (`pressplay`, HTTPS `*.run.app`, scale-to-zero) + **Cloud SQL** (`pressplay-db`); **Secret Manager** (`pressplay-session-secret`, `pressplay-database-url`, `pressplay-demo-secret`, `pressplay-db-password`); **`PRESSPLAY_DEMO_SECRET`** demo gate in production; **GitHub CI/CD** (`.github/workflows/deploy.yml` after `ci.yml`, WIF → Artifact Registry → Cloud Run); bootstrap `scripts/gcp-cloudrun-bootstrap.sh`; ops doc `docs/DEPLOY_GCP.md`; `.gitignore` hardening (`secrets/gcp-sa.json`, `cloud-sql-proxy*`, `data/temp/`). Legacy GCE VM (`pressplay-vm`, `docker-compose.prod.yml`) superseded — firewall `allow-pressplay-8000` removed. Local: `.env` uses literal `SESSION_SECRET` (not shell substitution). |
 | **2026-05-24 (b)** | **Production MVP persistence:** Postgres 16 in `docker-compose` (Alembic `001_initial_schema`); `DbJobStore` / `DbResultsRepository` via `app/repositories/factory.py`; **guest sessions** (signed `pressplay_session` cookie, `SESSION_SECRET`, `GUEST_SESSION_TTL_DAYS`); per-guest ownership on jobs/press kits/homepage; DB rate limits; `/health/ready`; stale-job sweep on startup; `run.sh` DB bootstrap; pytest + CI; `scripts/smoke_mvp.sh`, `scripts/migrate_fs_to_db.py`. |
 | **2026-05-24 (a)** | Phase 0 stability (Watcher claims, audit artifacts, Graphify CLI fix, `ResultsRepository.save`); vertical brand packs (`sports` \| `events` \| `corp`); Phase 1 writing team (`StrategistAgent`, `EditorLinter`, pipeline stages `strategizing` / `editing`); product-direction roadmap from grill-me (implemented vs planned). |
 | *(prior)* | Hackathon MVP: Watcher → Writer → Graphify, citations, editorial workflow, v1 API. |
@@ -21,7 +22,7 @@
 - An engaging **3-part Twitter thread**
 - An interactive **knowledge graph** (entities and relationships), rendered with **D3.js** in the browser
 
-**Deployment:** Public URL on **GCP** (single VM + Docker). Demo narrative may describe a **CrewAI-style multi-agent newsroom** (Watcher → Strategist → Writer → Editor → Mapper); implementation uses a **thin Python orchestrator** (not the CrewAI library) unless loops justify a framework later (§18).
+**Deployment:** Public **HTTPS** URL on **GCP Cloud Run** (`https://pressplay-….run.app`, scale-to-zero compute) + **Cloud SQL** Postgres. Local dev: **Docker Compose** (`docker-compose.yml`). Demo narrative may describe a **CrewAI-style multi-agent newsroom** (Watcher → Strategist → Writer → Editor → Mapper); implementation uses a **thin Python orchestrator** (not the CrewAI library) unless loops justify a framework later (§18).
 
 **Product positioning (v1.1):** Sell PressPlay as a **press kit factory with governance** — not a generic “YouTube summarizer.” Differentiators vs ad-hoc ChatGPT/Gemini chat: fixed deliverables (blog + 3 tweets + graph), separated fact layer (Watcher) and copy layer (Writer), **timestamped citations**, shareable `/newsroom/{id}` with **editorial workflow** (`draft` → `published`), JSON API + webhooks + exports, and Vertex on the customer’s GCP project. See `docs/PILOT_SPORTS.md` for a reference vertical pilot.
 
@@ -43,7 +44,9 @@
 | JSON API | **`/api/v1/jobs`** + export + optional **`webhook_url`** (best-effort POST on done/failed) |
 | Brand voice | **Vertical brand packs** — `config/brand-{sports\|events\|corp}.yaml`; job field **`vertical`** (default `events`); Writer `brand_prompt_suffix(vertical)`. Legacy fallback: `brand.yaml` / `config/brand.yaml` when pack missing |
 | Persistence | **`DATABASE_URL` set** (production path) → Postgres `guest_sessions`, `jobs`, `press_kits`, `rate_limit_events` via SQLAlchemy 2 async + Alembic. **Unset** → in-memory jobs + `data/results/` filesystem (local UI-only; see README) |
-| GCP auth | **Pattern C** — ADC locally (`gcloud auth application-default login`, **no** `GOOGLE_APPLICATION_CREDENTIALS`); service account JSON in Docker at `secrets/gcp-sa.json` → `/secrets/gcp.json` |
+| GCP auth | **Pattern C** — ADC locally (`gcloud auth application-default login`, **no** `GOOGLE_APPLICATION_CREDENTIALS`); **local Docker Compose:** `secrets/gcp-sa.json` → `/secrets/gcp.json`; **Cloud Run:** attached **`pressplay-runtime`** SA (metadata ADC, no JSON mount) |
+| Production deploy | **Cloud Run** + **Cloud SQL** + **Secret Manager**; CI via `.github/workflows/deploy.yml` (WIF `github-actions-deployer`); see `docs/DEPLOY_GCP.md` |
+| Demo gate (prod) | **`PRESSPLAY_DEMO_SECRET`** from Secret Manager `pressplay-demo-secret` on Cloud Run; form `secret` / header `X-PressPlay-Secret` |
 | Video context | **Real yt-dlp + ffmpeg** download/trim; **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context` |
 | Agent orchestration | **Thin `PipelineRunner`** — `WatcherAgent` → `StrategistAgent` → `WriterAgent` → `EditorLinter` (rule-based, non-blocking) → `GraphifyService`; pitch as CrewAI-style, no CrewAI library |
 | Mapper | **`GraphifyService`** — subprocess `graphify extract` when LLM keys available; **heuristic** graph fallback otherwise |
@@ -69,10 +72,11 @@
 | Config / export | **PyYAML**, **httpx** | Brand config; webhook delivery; export helpers |
 | Knowledge graph | **`graphifyy` pip package**, CLI binary **`graphify`** (also checks `graphifyy`) | `graphify extract <dir> --backend gemini --no-cluster --out <dir>`; reads `graphify-out/graph.json` |
 | Graph visualization | **D3.js** | Force-directed graph from normalized JSON |
-| Hosting | **GCP Compute Engine (or similar) + Docker Compose** | Postgres 16 + API; `data/` volume for temp video and optional FS audit files |
+| Hosting (production) | **Cloud Run** + **Cloud SQL** (Postgres 16) | HTTPS by default; `min-instances=0`; migrations in CI deploy step |
+| Hosting (local) | **Docker Compose** | Postgres 16 + API on `:8000`; `data/` for temp video and optional FS audit files |
 | Session / DB | **SQLAlchemy 2 async**, **asyncpg**, **Alembic**, **itsdangerous** | `app/db/`, `app/middleware/guest_session.py`, `app/repositories/` |
 
-**Explicitly not in v1:** CrewAI library, MP4 file upload, Pyvis server-rendered graphs, serverless-only hosting without a worker VM.
+**Explicitly not in v1:** CrewAI library, MP4 file upload, Pyvis server-rendered graphs, custom domain / managed cert (demo uses `*.run.app` only).
 
 ---
 
@@ -111,7 +115,7 @@ flowchart TB
     Edit[Editorial save regen workflow]
   end
 
-  subgraph api [FastAPI on GCP Docker]
+  subgraph api [FastAPI on Cloud Run or local Docker]
     MW[GuestSessionMiddleware]
     POST["POST /api/jobs"]
     JobRepo[(DbJobStore Postgres)]
@@ -124,8 +128,8 @@ flowchart TB
     WH[webhooks.py]
   end
 
-  subgraph data [docker-compose]
-    PG[(Postgres 16)]
+  subgraph data [Postgres]
+    PG[(Postgres 16 Cloud SQL or local compose)]
   end
 
   subgraph gcp [GCP Vertex]
@@ -202,7 +206,7 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | `GET /api/v1/newsroom/{id}/export` | **Shipped** | `format=markdown\|json\|slack` |
 | Editorial: save, workflow, partial regen | **Shipped** | `/newsroom/{id}/save`, `/api/jobs/{id}/regenerate` |
 | Watcher claims + `claims.json` | **Shipped** | Citations on newsroom with jump links |
-| `GET /health` | **Shipped** | Liveness for Docker/VM |
+| `GET /health` | **Shipped** | Liveness for Docker / Cloud Run |
 | YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1` |
 | MemvidService (CLI ingest) | **Shipped** | Requires local `memvid` + Whisper models; see blockers §17 |
 | WatcherAgent / WriterAgent | **Shipped** | Structured `WatcherOutput` + `WriterOutput`; Vertex when GCP set; mock JSON with sample claims when `should_mock_llm()` |
@@ -224,7 +228,10 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | D3 newsroom graph | **Shipped** | `app/static/js/graph.js` |
 | JobStore + rate limit + concurrent cap (2) | **Shipped** | `DbJobStore` or legacy `JobStore`; `check_concurrent_cap()` async |
 | ResultsRepository + past runs on `/` | **Shipped** | Guest-scoped `list_recent`; Postgres or FS; manifest fields include mock flags, `workflow_status`, `vertical`, audit JSON |
-| GCP production deploy | **Not done** | Docker image + compose ready; VM deploy TBD |
+| GCP production deploy | **Shipped** | Cloud Run + Cloud SQL + Secret Manager; `deploy.yml`; `docs/DEPLOY_GCP.md`; demo gate |
+| GitHub deploy workflow | **Shipped** | `.github/workflows/deploy.yml` — build `linux/amd64` → AR → Cloud Run; prints HTTPS URL |
+| `scripts/gcp-cloudrun-bootstrap.sh` | **Shipped** | Cloud SQL, secrets, firewall cleanup, Cloud Run deploy |
+| Legacy VM path | **Deprecated** | `pressplay-vm`, `docker-compose.prod.yml`, `scripts/gcp-bootstrap.sh` — not used by CI |
 | `run.sh` local launcher | **Shipped** | Requires `GCP_PROJECT_ID` for live Vertex path; see §12.1 |
 
 ---
@@ -504,11 +511,22 @@ pressplay/
 │   ├── test_health.py
 │   ├── test_guest_session.py
 │   └── test_ownership.py
+├── .github/workflows/
+│   ├── ci.yml                    # pytest + Alembic on PR/push to main
+│   └── deploy.yml                # Cloud Run deploy after CI on main
+├── docker-compose.yml            # local dev
+├── docker-compose.prod.yml       # legacy GCE VM (deprecated)
+├── docs/
+│   ├── DEPLOY_GCP.md             # Cloud Run + Cloud SQL + CI/CD runbook
+│   └── PILOT_SPORTS.md
 └── scripts/
     ├── verify_gcp.py
     ├── cleanup_ttl.py
     ├── smoke_mvp.sh              # health → guest → job → newsroom
-    └── migrate_fs_to_db.py       # optional FS → Postgres import
+    ├── migrate_fs_to_db.py       # optional FS → Postgres import
+    ├── gcp-cloudrun-bootstrap.sh # production bootstrap (Cloud SQL + Cloud Run)
+    ├── gcp-bootstrap.sh          # legacy VM bootstrap (deprecated)
+    └── gcp-vm-startup.sh         # legacy VM Docker install
 ```
 
 ---
@@ -520,7 +538,7 @@ pressplay/
 | `GCP_PROJECT_ID` | *(empty)* | Preferred; `VERTEX_PROJECT` alias. Unset → auto **mock LLM** (ingest still real unless full mock) |
 | `GCP_LOCATION` | `us-central1` | `VERTEX_LOCATION` alias |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Vertex model id for Watcher/Writer |
-| `GOOGLE_APPLICATION_CREDENTIALS` | *(unset locally)* | **Docker/VM only:** `/secrets/gcp.json` from `secrets/gcp-sa.json` mount |
+| `GOOGLE_APPLICATION_CREDENTIALS` | *(unset locally)* | **Local Docker Compose only:** `/secrets/gcp.json` from `secrets/gcp-sa.json`; **not** used on Cloud Run |
 | `MOCK_LLM` | `false` | `true` → stub Watcher/Writer; **real** yt-dlp + Memvid |
 | `PRESSPLAY_USE_MOCK` | *(empty)* | `1` → **full fast mock** (skip ingest); `0` → force real ingest even without GCP |
 | `MAX_CONCURRENT_JOBS` | `2` | **Locked** for v1 |
@@ -529,11 +547,13 @@ pressplay/
 | `QUICK_MINUTES_MIN` / `MAX` | `5` / `20` | Server-enforced |
 | `FULL_MAX_VIDEO_SECONDS` | `3600` | 1 hour |
 | `RESULTS_TTL_HOURS` | `72` | `scripts/cleanup_ttl.py` |
-| `PRESSPLAY_DEMO_SECRET` | *(unset)* | Optional shared-secret gate |
+| `PRESSPLAY_DEMO_SECRET` | *(unset locally)* | Optional shared-secret gate; **set in production** via Secret Manager `pressplay-demo-secret` on Cloud Run |
+| `SESSION_SECRET` (production) | Secret Manager | `pressplay-session-secret` — not in `.env` on Cloud Run |
+| `DATABASE_URL` (production) | Secret Manager | `pressplay-database-url` — Cloud SQL unix socket (`/cloudsql/...`) |
 | `GRAPHIFY_BIN` | *(auto)* | Override path to `graphify` binary |
 | `GEMINI_API_KEY` | *(optional)* | For Graphify CLI `--backend gemini`; not required for Vertex Watcher/Writer |
 | `DATABASE_URL` | *(unset = FS dev)* | `postgresql+asyncpg://...` → Postgres jobs, press kits, guest sessions |
-| `SESSION_SECRET` | *(required in compose)* | Cookie signing for guest sessions |
+| `SESSION_SECRET` | *(required in compose / .env)* | Cookie signing; use literal hex from `openssl rand -hex 32` in `.env` (no shell `$(...)` in file) |
 | `GUEST_SESSION_TTL_DAYS` | `30` | Guest session lifetime |
 
 **Optional auth:** If `PRESSPLAY_DEMO_SECRET` is set, require matching form field `secret` or `X-PressPlay-Secret` header. If unset, no auth.
@@ -584,52 +604,81 @@ See `README.md` for command examples.
 
 ## 12. GCP & Docker Deployment
 
-| Component | Recommendation |
-|-----------|----------------|
-| VM | e.g. **e2-standard-4** (4 vCPU, 16GB RAM) for Memvid/Whisper |
-| Disk | 50–100GB boot + volume mount for `data/` |
-| Image | `Dockerfile`: Python 3.11-slim, `ffmpeg`, `curl`, pip deps; `memvid-sdk` + best-effort `memvid models install whisper-small` at build |
-| Secrets | `secrets/gcp-sa.json` → mount `/secrets/gcp.json`; `GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json` |
-| HTTPS | Reverse proxy (Caddy/nginx) or GCP load balancer → container `:8000` |
-| Egress | Outbound HTTPS for YouTube, Vertex |
+**Runbook:** `docs/DEPLOY_GCP.md` (authoritative for operators). **Project:** `project-3bb9c91c-69ed-4507-998`, region **`us-central1`**.
 
-### 12.1 GCP auth — Pattern C (locked)
+### 12.1 Production (shipped) — Cloud Run + Cloud SQL
+
+| Component | Resource | Notes |
+|-----------|----------|-------|
+| Public URL | `https://pressplay-….run.app` | HTTPS on 443; **no `:8000` in URL** |
+| Compute | Cloud Run service **`pressplay`** | `min-instances=0`, `max-instances=3`, 2 vCPU, 4 GiB, timeout 3600s |
+| Database | Cloud SQL **`pressplay-db`** | Postgres 16, `db-f1-micro` — **always on** (Cloud Run scales to zero; DB does not) |
+| Image | Artifact Registry `pressplay/newsroom` | `linux/amd64` builds only |
+| Runtime SA | `pressplay-runtime@…` | Vertex (`roles/aiplatform.user`), Cloud SQL client, Secret Accessor |
+| Deploy SA (CI) | `github-actions-deployer@…` | WIF pool `github-pool` / provider `github-provider`; repo `sethum-VS/PressPlay` |
+| Ingress security | No world-open VM `:8000` | Firewall `allow-pressplay-8000` **removed** at Cloud Run bootstrap |
+
+**Secret Manager → Cloud Run env:**
+
+| Secret | Env var |
+|--------|---------|
+| `pressplay-session-secret` | `SESSION_SECRET` |
+| `pressplay-database-url` | `DATABASE_URL` (asyncpg + `/cloudsql/PROJECT:REGION:pressplay-db`) |
+| `pressplay-demo-secret` | `PRESSPLAY_DEMO_SECRET` |
+| `pressplay-db-password` | Used when building `pressplay-database-url` |
+
+**CI/CD:** Push to `main` → `ci.yml` (pytest) → `deploy.yml` (build/push image, Cloud SQL proxy + `alembic upgrade head`, `gcloud run deploy`, print HTTPS URL in job summary).
+
+**GitHub Actions variables:** `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_AR_REPOSITORY`, `GCP_IMAGE_NAME`, `GCP_CLOUD_RUN_SERVICE`, `GCP_SQL_INSTANCE`. No GitHub secrets required when WIF is configured.
+
+**Bootstrap (one-time):** `./scripts/gcp-cloudrun-bootstrap.sh <GCP_PROJECT_ID>`
+
+### 12.2 GCP auth — Pattern C (locked)
 
 | Environment | Credentials | Configuration |
 |-------------|-------------|-----------------|
-| **Local dev** | [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) | `gcloud auth application-default login`; set `GCP_PROJECT_ID`, `GCP_LOCATION`; **leave `GOOGLE_APPLICATION_CREDENTIALS` unset** |
-| **Docker / GCP VM** | Service account JSON | Mount `./secrets/gcp-sa.json:/secrets/gcp.json:ro`; compose sets `GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json` |
+| **Local dev** | [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials) | `gcloud auth application-default login`; set `GCP_PROJECT_ID`, `GCP_LOCATION` in `.env`; **leave `GOOGLE_APPLICATION_CREDENTIALS` unset** |
+| **Local Docker Compose** | Service account JSON | `secrets/gcp-sa.json` → mount `/secrets/gcp.json`; `GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json` |
+| **Cloud Run (production)** | Attached **`pressplay-runtime`** SA | Metadata ADC; **no** `GOOGLE_APPLICATION_CREDENTIALS` / JSON mount |
 
 `GeminiAdapter` uses `google.genai.Client(vertexai=True, project=..., location=...)`. Startup logs `Gemini auth mode: adc | service_account | mock`.
 
-**Implemented `docker-compose.yml`:** **Postgres 16** service + API with `DATABASE_URL`, `SESSION_SECRET`, Alembic on start, guest session middleware, plus GCP SA mount and `data/` volume for artifacts/backward compatibility.
+### 12.3 Local development — `docker-compose.yml`
+
+**Postgres 16** + API on **`http://localhost:8000`**. Alembic on container start; guest session middleware; optional `secrets/gcp-sa.json` mount for Vertex in Docker.
 
 ```yaml
 services:
   db:
     image: postgres:16-alpine
-    ports: ["5432:5432"]           # local dev; omit public bind on GCP VM
-    volumes: [pressplay_pg:/var/lib/postgresql/data]
-    healthcheck: pg_isready
+    ports: ["5432:5432"]           # local dev only
   newsroom:
     build: .
-    depends_on:
-      db: { condition: service_healthy }
     ports: ["8000:8000"]
-    command: sh -c "alembic upgrade head && uvicorn ..."
     volumes:
       - ./data:/app/data
-      - ./secrets/gcp-sa.json:/secrets/gcp.json:ro
+      - ./secrets/gcp-sa.json:/secrets/gcp.json:ro   # optional; gitignored
     environment:
       DATABASE_URL: postgresql+asyncpg://pressplay:pressplay@db:5432/pressplay
-      SESSION_SECRET: ${SESSION_SECRET:-dev-change-me-set-in-env-for-production}
-      DEBUG: "false"
+      SESSION_SECRET: ${SESSION_SECRET}
       GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp.json
-volumes:
-  pressplay_pg:
 ```
 
-**Memvid shipping:** `memvid-sdk` is installed in the Docker image with a best-effort Whisper model install at build time. Production operators should still verify `memvid` CLI + `whisper-small` on the host or bake a multi-stage image with the full CLI — see §17 and README ingest section.
+**`.env` (local):** `GCP_PROJECT_ID`, `GCP_LOCATION`, `DATABASE_URL` (localhost), `SESSION_SECRET` as a **literal** hex string (`openssl rand -hex 32`). Do not use `SESSION_SECRET=$(openssl …)` in the file — dotenv does not execute shell.
+
+### 12.4 Legacy GCE VM (deprecated)
+
+| Item | Status |
+|------|--------|
+| VM `pressplay-vm` (`us-central1-a`, `e2-standard-4`) | May still exist; **not** updated by `deploy.yml` |
+| `docker-compose.prod.yml`, `scripts/gcp-bootstrap.sh` | Reference only |
+| Cost savings | Stop or delete VM when Cloud Run demo is sufficient — see `docs/DEPLOY_GCP.md` |
+
+### 12.5 Container image
+
+`Dockerfile`: Python 3.11-slim, `ffmpeg`, `curl`, pip deps; `memvid-sdk` + best-effort `whisper-small` at build. **Cloud Run:** `uvicorn` on `$PORT` (8000); Alembic runs in **CI deploy step**, not at container boot (fast cold start).
+
+**Memvid:** Operators should verify `memvid` CLI + `whisper-small` in the image or accept ingest limitations — see §17.
 
 ---
 
@@ -648,6 +697,7 @@ volumes:
 - Poll `GET /api/jobs/{id}` (`hx-trigger="every 2s"`) until `done` → link to `/newsroom/{id}`
 - **Your recent press kits** from `list_recent(guest_session_id)` (guest-scoped)
 - Optional banner: guest session expiry (`guest_expires`, `guest_session_days`)
+- **Demo secret** field when `PRESSPLAY_DEMO_SECRET` is set (production Cloud Run); required to submit jobs
 
 ### 13.2 Newsroom (`newsroom.html`)
 
@@ -674,12 +724,12 @@ volumes:
 | 3 Brains | `GeminiAdapter` (`google-genai` Vertex), `WatcherAgent`, `WriterAgent` + Pydantic, mock modes | **Done** |
 | 4 Mapper | `GraphifyService` (`graphify extract` + heuristic), D3 `graph.js`, `mapping` stage | **Done** |
 | 5 Paint | `ResultsRepository`, `/newsroom/{id}`, past runs, error partials, rate limit, concurrent cap=2 | **Done** |
-| 6 Deploy | GCP VM, HTTPS, public smoke test | **Not done** |
+| 6 Deploy | Cloud Run, HTTPS, public smoke test | **Done** |
 | 7 Viability (B2B) | Citations, editorial workflow, v1 API/webhooks/export, brand.yaml, sports pilot doc | **Done** |
 | 8 Phase 0 — Stability | Watcher claim normalization/retry; audit `unified_context.txt`; Graphify `_build_graph_sync` fix; save() vertical param | **Done** |
 | 9 Phase 1 — Writing team | Strategist + Editor linter; pipeline stages; brand vertical packs | **Done** |
 | 10 Postgres MVP | `DATABASE_URL`, Alembic, guest sessions, docker-compose DB | **Done** |
-| 11 Deploy | GCP VM, HTTPS, public smoke test | **Not done** |
+| 11 Deploy | Cloud Run, HTTPS, demo secret, CI/CD | **Done** |
 
 ---
 
@@ -741,10 +791,10 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 - CrewAI / LangGraph library integration
 - User accounts / OAuth / SSO (guest sessions are **not** registered users)
 - Org tenancy / per-org API keys
-- Managed Cloud SQL (v1 uses **Postgres in docker-compose** on the same VM; not a separate managed DB product)
+- Custom domain + Google-managed SSL (demo uses Cloud Run `*.run.app` only)
 - Graphify HTML visualization (using D3 only)
 - Playlist / multi-video batch processing
-- Serverless-only deployment without a persistent worker VM
+- Scale-to-zero **database** (Cloud SQL stays always on for durable jobs)
 - Automated claim verification (entailment model) — citations are model-generated, not cryptographically proven
 - WordPress/HubSpot push integrations (export formats only; no OAuth to CMS)
 
@@ -771,13 +821,14 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 - [x] **Phase 1 writing team** — Strategist, Editor linter, extended pipeline stages
 - [x] **Vertical brand packs** — `brand-{vertical}.yaml`, job/API `vertical`
 - [x] **Postgres MVP** — `DATABASE_URL`, guest sessions, Alembic, ownership, `/health/ready`, CI, `smoke_mvp.sh`
+- [x] **GCP production deploy** — Cloud Run HTTPS, Cloud SQL, Secret Manager, `deploy.yml`, `PRESSPLAY_DEMO_SECRET`, `docs/DEPLOY_GCP.md`
 - [x] **`brand_banned_phrases` / `brand_max_tweet_chars`** — restored in `app/services/brand.py` for EditorLinter
 
 ### Still open / blockers
 
 - [ ] **Memvid + Whisper on demo machine** — verify `memvid models install whisper-small` after deploy; Docker build only best-effort
 - [ ] **`GEMINI_API_KEY` for Graphify CLI** (optional) — heuristic graph acceptable when unset
-- [ ] **GCP production deploy** — VM, HTTPS, public smoke test
+- [ ] **Delete legacy VM** — `pressplay-vm` optional cost cleanup after verifying Cloud Run
 - [ ] **Nav chrome** — Sources / Analytics decorative (§13.3)
 - [ ] **Optional:** CrewAI in repo for pitch parity only
 - [ ] **`run.sh` vs mock-only dev** — `run.sh` requires `GCP_PROJECT_ID`; use `PRESSPLAY_USE_MOCK=1` + direct `uvicorn` for UI-only demos
@@ -799,7 +850,7 @@ Decisions captured as **product direction**. Only items marked **shipped** exist
 | **Voice** | Brand voice evolves from **published kits** only (learn from approved output) | **Future** |
 | **Memvid** | **Dual index:** per-video ingest (shipped) + **org corpus** Memvid for cross-event context | **Per-video shipped**; **org corpus Phase 2** |
 | **Publish** | **Always draft-first**; conditional auto-publish when confidence + policy allow | **Draft-first shipped**; auto-publish **Phase 3** |
-| **Infra** | **GCP VM** + Docker Compose (Postgres + API); **GCS backup** for `data/` / artifacts | **Compose + Postgres MVP shipped**; **GCS backup not built** |
+| **Infra** | **Cloud Run** + **Cloud SQL** (prod); Docker Compose (local); **GCS backup** for `data/` / artifacts | **Production deploy shipped** (`docs/DEPLOY_GCP.md`); **GCS backup not built** |
 | **Architecture** | **Thin pipeline**; add frameworks (CrewAI/LangGraph) only when agent loops become painful | **Current: thin orchestrator shipped** |
 | **Calendar** | Content calendar / scheduling integrations | **Not built** |
 | **Claim verification** | Entailment or coverage model vs Watcher claims | **Not built** (§16) |
@@ -811,5 +862,6 @@ Decisions captured as **product direction**. Only items marked **shipped** exist
 | **0** | Stability, audit artifacts, Graphify/Watcher/save fixes | **Shipped** |
 | **1** | Strategist + Editor + vertical brand packs | **Shipped** |
 | **1b** | Postgres persistence, guest sessions, deploy polish (CI, smoke test) | **Shipped** |
+| **1c** | Cloud Run + Cloud SQL production, HTTPS, demo secret, GitHub deploy workflow | **Shipped** |
 | **2** | Coverage gates, org Memvid corpus, stronger grounding automation | **Planned** |
 | **3** | Head-of-media orchestration, conditional auto-publish, GCS backup, calendar, registered users | **Planned** |

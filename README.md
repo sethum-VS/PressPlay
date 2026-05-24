@@ -137,7 +137,9 @@ chmod +x scripts/smoke_mvp.sh
 | `GCP_LOCATION` | Vertex region (e.g. `us-central1`) |
 | `MOCK_LLM=true` | Real ingest; stub Watcher/Writer |
 | `PRESSPLAY_USE_MOCK=1` | **UI-only** fast mock — skips download/Memvid (not default) |
-| `PRESSPLAY_DEMO_SECRET` | Optional gate for public demos |
+| `PRESSPLAY_DEMO_SECRET` | Optional shared-secret gate (private demos only; not used on Cloud Run) |
+| `RATE_LIMIT_PER_IP_PER_HOUR` | Per-IP cap across guest sessions (default 10) |
+| `RATE_LIMIT_MIN_INTERVAL_SECONDS` | Cooldown between jobs from same IP (default 60) |
 | `PRESSPLAY_INSTALL_WHISPER=1` | `./run.sh` runs `memvid models install whisper-small` |
 | `GRAPHIFY_BIN` | Override path to `graphify` CLI |
 | `DATABASE_URL` | Postgres async URL (required for MVP deploy) |
