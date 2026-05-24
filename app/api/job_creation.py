@@ -22,7 +22,9 @@ def parse_brand_vertical(vertical: str | BrandVertical | None) -> BrandVertical:
     try:
         return BrandVertical(key)
     except ValueError:
-        raise ValidationError("vertical must be 'sports', 'events', or 'corp'.")
+        raise ValidationError(
+            "vertical must be 'sports', 'events', 'corp', or 'technical'."
+        )
 
 
 async def create_pressplay_job(

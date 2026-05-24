@@ -18,9 +18,11 @@ def _templates(request: Request) -> Jinja2Templates:
     return Jinja2Templates(directory=str(request.app.state.templates_dir))
 
 
-@router.get("/", response_class=HTMLResponse)
+@router.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def index(request: Request):
     settings = request.app.state.settings
+    if request.method == "HEAD":
+        return HTMLResponse(status_code=200)
     repo = get_results_repo()
     guest = get_current_guest(request)
     past_runs = await repo.list_recent(guest.id)

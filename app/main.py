@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api import routes_editorial, routes_jobs, routes_pages, routes_v1
 from app.config import get_settings
-from app.db.session import check_db_connection, close_db, init_db
+from app.db.session import check_db_connection, close_db, init_db, wait_for_db_connection
 from app.db.startup import sweep_stale_jobs
 from app.middleware.guest_session import GuestSessionMiddleware
 
@@ -26,6 +26,10 @@ async def lifespan(app: FastAPI):
 
     if settings.use_database:
         await init_db()
+        if not await wait_for_db_connection():
+            raise RuntimeError(
+                "Postgres connection failed after retries — check DATABASE_URL and Cloud SQL"
+            )
         await sweep_stale_jobs()
         logger.info("Postgres connected — guest sessions and durable jobs enabled")
     else:

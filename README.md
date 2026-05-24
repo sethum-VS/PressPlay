@@ -146,7 +146,7 @@ chmod +x scripts/smoke_mvp.sh
 | `SESSION_SECRET` | Cookie signing secret (required in Docker compose) |
 | `GUEST_SESSION_TTL_DAYS` | Guest session lifetime (default `30`) |
 
-**Brand voice (vertical packs):** Each job selects a vertical at create time (`sports`, `events`, `corp`; default `events`). PressPlay loads `config/brand-{vertical}.yaml` into the Writer prompt only. Customize tone, voice, banned phrases, and hashtag policy in those files. Legacy override: copy `config/brand.yaml.example` → `config/brand.yaml` (used only when a vertical pack file is missing).
+**Brand voice (vertical packs):** Each job selects a vertical at create time (`sports`, `events`, `corp`, `technical`; default `events`). PressPlay loads `config/brand-{vertical}.yaml` into the Writer prompt only. Customize tone, voice, banned phrases, and hashtag policy in those files. Legacy override: copy `config/brand.yaml.example` → `config/brand.yaml` (used only when a vertical pack file is missing).
 
 ---
 
@@ -175,7 +175,7 @@ curl -s -X POST http://localhost:8000/api/v1/jobs \
   -d '{"youtube_url":"https://www.youtube.com/watch?v=VIDEO_ID","mode":"quick","vertical":"sports","webhook_url":"https://example.com/hook"}'
 ```
 
-`vertical` (or HTMX form field `vertical`): `sports` | `events` | `corp`. Poll responses include `"vertical"` on `GET /api/v1/jobs/{id}`; saved press kits store it on `manifest.json`.
+`vertical` (or HTMX form field `vertical`): `sports` | `events` | `corp` | `technical`. Poll responses include `"vertical"` on `GET /api/v1/jobs/{id}`; saved press kits store it on `manifest.json`.
 
 ---
 

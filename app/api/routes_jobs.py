@@ -2,6 +2,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
+from app.api.job_ids import parse_job_id
 from app.services.abuse_guard import check_honeypot
 from app.api.deps_guest import get_guest_id
 from app.api.job_creation import (
@@ -75,6 +76,7 @@ async def poll_job(request: Request, job_id: str):
     store = get_job_store()
     guest_id = get_guest_id(request)
     try:
+        parse_job_id(job_id)
         job = await store.get_for_guest(job_id, guest_id)
     except JobNotFoundError:
         return _templates(request).TemplateResponse(

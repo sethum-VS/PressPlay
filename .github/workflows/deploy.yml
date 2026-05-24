@@ -80,9 +80,9 @@ jobs:
             --timeout=3600 \
             --port=8000 \
             --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest" \
-            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=3,RATE_LIMIT_PER_IP_PER_HOUR=8,RATE_LIMIT_MIN_INTERVAL_SECONDS=120,MAX_CONCURRENT_JOBS=2" \
+            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=5,RATE_LIMIT_PER_IP_PER_HOUR=12,RATE_LIMIT_MIN_INTERVAL_SECONDS=90,MAX_CONCURRENT_JOBS=2" \
             --command="sh" \
-            --args="-c,alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" \
+            --args="-c,sh scripts/migrate_with_retry.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000" \
             --quiet
 
       - name: Print public HTTPS URL
@@ -93,4 +93,4 @@ jobs:
             --format='value(status.url)')"
           echo "PressPlay (HTTPS): ${URL}"
           echo "Health: ${URL}/health/ready"
-          echo "Abuse limits: 3 jobs/hr per session, 8/hr per IP, 120s cooldown, max 2 concurrent"
+          echo "Abuse limits: 5 jobs/hr per session, 12/hr per IP, 90s cooldown, max 2 concurrent"

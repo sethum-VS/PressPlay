@@ -173,10 +173,10 @@ gcloud run deploy "$SERVICE" \
   --timeout=3600 \
   --port=8000 \
   --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest" \
-  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=3,RATE_LIMIT_PER_IP_PER_HOUR=8,RATE_LIMIT_MIN_INTERVAL_SECONDS=120,MAX_CONCURRENT_JOBS=2" \
+  --set-env-vars="GCP_PROJECT_ID=${PROJECT_ID},GCP_LOCATION=${REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=5,RATE_LIMIT_PER_IP_PER_HOUR=12,RATE_LIMIT_MIN_INTERVAL_SECONDS=90,MAX_CONCURRENT_JOBS=2" \
   --quiet
 
 URL="$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')"
 info ""
 info "PressPlay HTTPS URL: $URL"
-info "Open access — abuse limits: 3 jobs/hr per session, 8/hr per IP, 120s cooldown, max 2 concurrent"
+info "Open access — abuse limits: 5 jobs/hr per session, 12/hr per IP, 90s cooldown, max 2 concurrent"

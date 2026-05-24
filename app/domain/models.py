@@ -14,6 +14,7 @@ class BrandVertical(str, Enum):
     SPORTS = "sports"
     EVENTS = "events"
     CORP = "corp"
+    TECHNICAL = "technical"
 
 
 class JobStatus(str, Enum):

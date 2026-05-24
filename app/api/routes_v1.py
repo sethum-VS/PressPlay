@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
 from app.api.deps_guest import get_guest_id
+from app.api.job_ids import parse_job_id
 from app.api.job_creation import (
     create_pressplay_job,
     parse_brand_vertical,
@@ -67,9 +68,18 @@ async def poll_job_v1(request: Request, job_id: str):
     store = get_job_store()
     guest_id = get_guest_id(request)
     try:
+        parse_job_id(job_id)
         job = await store.get_for_guest(job_id, guest_id)
     except JobNotFoundError:
-        return JSONResponse({"error": "Job not found."}, status_code=404)
+        return JSONResponse(
+            {
+                "error": (
+                    "Job not found. For API clients, include the X-PressPlay-Session "
+                    "header from the create-job response (same value as session_token)."
+                )
+            },
+            status_code=404,
+        )
 
     payload = job.to_poll_json()
     if job.status == JobStatus.DONE and job.result_url:
@@ -83,6 +93,7 @@ async def export_newsroom(request: Request, job_id: str, format: str = Query("js
     repo = get_results_repo()
     guest_id = get_guest_id(request)
     try:
+        parse_job_id(job_id)
         result = await repo.load_for_guest(job_id, guest_id)
     except ResultsNotFoundError:
         return JSONResponse({"error": "Press kit not found."}, status_code=404)

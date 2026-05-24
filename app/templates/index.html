@@ -50,6 +50,7 @@
         class="w-full bg-surface-card border border-hairline-strong rounded-lg py-3 px-4 font-body-md text-ink focus:outline-none focus:ring-2 focus:ring-primary/20"
       >
         <option value="events" selected>General event</option>
+        <option value="technical">Technical Event</option>
         <option value="sports">Sports post-game</option>
         <option value="corp">Internal corporate comms</option>
       </select>
@@ -159,6 +160,12 @@
       const wrap = document.getElementById('quick-minutes-wrap');
       wrap.style.display = document.querySelector('input[name="mode"]:checked').value === 'quick' ? 'flex' : 'none';
     });
+  });
+  document.body.addEventListener('htmx:afterSwap', (event) => {
+    if (event.detail.target?.id === 'job-area' && event.detail.target.innerHTML.trim()) {
+      const loading = document.getElementById('loading-state');
+      loading?.classList.remove('htmx-request');
+    }
   });
 </script>
 {% endblock %}

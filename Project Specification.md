@@ -4,9 +4,11 @@
 
 | Date | Summary |
 |------|---------|
-| **2026-05-25** | **GCP production deploy:** **Cloud Run** (`pressplay`, HTTPS `*.run.app`, scale-to-zero) + **Cloud SQL** (`pressplay-db`); **Secret Manager** (`pressplay-session-secret`, `pressplay-database-url`, `pressplay-demo-secret`, `pressplay-db-password`); **`PRESSPLAY_DEMO_SECRET`** demo gate in production; **GitHub CI/CD** (`.github/workflows/deploy.yml` after `ci.yml`, WIF → Artifact Registry → Cloud Run); bootstrap `scripts/gcp-cloudrun-bootstrap.sh`; ops doc `docs/DEPLOY_GCP.md`; `.gitignore` hardening (`secrets/gcp-sa.json`, `cloud-sql-proxy*`, `data/temp/`). Legacy GCE VM (`pressplay-vm`, `docker-compose.prod.yml`) superseded — firewall `allow-pressplay-8000` removed. Local: `.env` uses literal `SESSION_SECRET` (not shell substitution). |
+| **2026-05-25 (c)** | **Reliability + Cloud Run ops:** `scripts/migrate_with_retry.sh` on container start (Alembic retries until Cloud SQL ready); `wait_for_db_connection()` in app lifespan. **YouTube on datacenter IPs:** Deno in `Dockerfile` for yt-dlp JS; `player_client` `android`/`web`; bot/sign-in errors mapped to clear job failures; **no cookies/sign-in in v1**. **API:** `app/api/job_ids.py` — malformed job UUID → **404**; **`HEAD /`** for probes; webhooks on **ingest failures** (`DownloadError`, `MemvidError`). **Image:** `COPY config/` brand packs. **UI:** HTMX clears stuck loading state after job partial swap. Production abuse limits **5 / 12 / 90s** in `deploy.yml`. |
+| **2026-05-25 (b)** | **Open production:** Cloud Run deploy no longer mounts `PRESSPLAY_DEMO_SECRET` (public HTTPS, no shared password). **Abuse controls** in `app/services/abuse_guard.py` — per `(guest_session_id, client_ip)` hourly cap, per-IP hourly cap, minimum seconds between jobs, global concurrent cap, HTMX honeypot (`website` field). Production limits in `deploy.yml` (`RATE_LIMIT_PER_HOUR=5`, `RATE_LIMIT_PER_IP_PER_HOUR=12`, `RATE_LIMIT_MIN_INTERVAL_SECONDS=90`). **`technical`** vertical + `config/brand-technical.yaml` (UI label **Technical Event**). |
+| **2026-05-25 (a)** | **GCP production deploy:** **Cloud Run** (`pressplay`, HTTPS `*.run.app`, scale-to-zero) + **Cloud SQL** (`pressplay-db`); **Secret Manager** (`pressplay-session-secret`, `pressplay-database-url`, `pressplay-db-password`); **GitHub CI/CD** (`.github/workflows/deploy.yml` after `ci.yml`, WIF → Artifact Registry → Cloud Run); bootstrap `scripts/gcp-cloudrun-bootstrap.sh`; ops doc `docs/DEPLOY_GCP.md`; `.gitignore` hardening (`secrets/gcp-sa.json`, `cloud-sql-proxy*`, `data/temp/`). Legacy GCE VM (`pressplay-vm`, `docker-compose.prod.yml`) superseded — firewall `allow-pressplay-8000` removed. Local: `.env` uses literal `SESSION_SECRET` (not shell substitution). |
 | **2026-05-24 (b)** | **Production MVP persistence:** Postgres 16 in `docker-compose` (Alembic `001_initial_schema`); `DbJobStore` / `DbResultsRepository` via `app/repositories/factory.py`; **guest sessions** (signed `pressplay_session` cookie, `SESSION_SECRET`, `GUEST_SESSION_TTL_DAYS`); per-guest ownership on jobs/press kits/homepage; DB rate limits; `/health/ready`; stale-job sweep on startup; `run.sh` DB bootstrap; pytest + CI; `scripts/smoke_mvp.sh`, `scripts/migrate_fs_to_db.py`. |
-| **2026-05-24 (a)** | Phase 0 stability (Watcher claims, audit artifacts, Graphify CLI fix, `ResultsRepository.save`); vertical brand packs (`sports` \| `events` \| `corp`); Phase 1 writing team (`StrategistAgent`, `EditorLinter`, pipeline stages `strategizing` / `editing`); product-direction roadmap from grill-me (implemented vs planned). |
+| **2026-05-24 (a)** | Phase 0 stability (Watcher claims, audit artifacts, Graphify CLI fix, `ResultsRepository.save`); vertical brand packs (`sports` \| `events` \| `corp`; **`technical`** added 2026-05-25); Phase 1 writing team (`StrategistAgent`, `EditorLinter`, pipeline stages `strategizing` / `editing`); product-direction roadmap from grill-me (implemented vs planned). |
 | *(prior)* | Hackathon MVP: Watcher → Writer → Graphify, citations, editorial workflow, v1 API. |
 
 ---
@@ -42,18 +44,19 @@
 | Citations | **Claim** objects with `start_sec` / `end_sec`, `source` (`transcript` \| `visual`); persisted as `claims.json` (FS) or `press_kits.claims` JSONB (Postgres); newsroom “jump to moment” links |
 | Editorial | **WorkflowStatus** on manifest; save blog/tweets; partial regen (`tweets` \| `blog` \| `graph`) without re-ingest |
 | JSON API | **`/api/v1/jobs`** + export + optional **`webhook_url`** (best-effort POST on done/failed) |
-| Brand voice | **Vertical brand packs** — `config/brand-{sports\|events\|corp}.yaml`; job field **`vertical`** (default `events`); Writer `brand_prompt_suffix(vertical)`. Legacy fallback: `brand.yaml` / `config/brand.yaml` when pack missing |
+| Brand voice | **Vertical brand packs** — `config/brand-{sports\|events\|corp\|technical}.yaml`; job field **`vertical`** (default `events`); Writer `brand_prompt_suffix(vertical)`. Legacy fallback: `brand.yaml` / `config/brand.yaml` when pack missing |
 | Persistence | **`DATABASE_URL` set** (production path) → Postgres `guest_sessions`, `jobs`, `press_kits`, `rate_limit_events` via SQLAlchemy 2 async + Alembic. **Unset** → in-memory jobs + `data/results/` filesystem (local UI-only; see README) |
 | GCP auth | **Pattern C** — ADC locally (`gcloud auth application-default login`, **no** `GOOGLE_APPLICATION_CREDENTIALS`); **local Docker Compose:** `secrets/gcp-sa.json` → `/secrets/gcp.json`; **Cloud Run:** attached **`pressplay-runtime`** SA (metadata ADC, no JSON mount) |
 | Production deploy | **Cloud Run** + **Cloud SQL** + **Secret Manager**; CI via `.github/workflows/deploy.yml` (WIF `github-actions-deployer`); see `docs/DEPLOY_GCP.md` |
-| Demo gate (prod) | **`PRESSPLAY_DEMO_SECRET`** from Secret Manager `pressplay-demo-secret` on Cloud Run; form `secret` / header `X-PressPlay-Secret` |
-| Video context | **Real yt-dlp + ffmpeg** download/trim; **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context` |
+| Public access (prod) | **Open** — no shared password on Cloud Run. Optional **`PRESSPLAY_DEMO_SECRET`** for private demos only (local or manual secret mount); not used by CI deploy |
+| Abuse controls (prod) | **`app/services/abuse_guard.py`** — per guest+IP hourly cap, per-IP hourly cap (limits cookie cycling), submission cooldown, honeypot on HTMX form; **`MAX_CONCURRENT_JOBS=2`** global. See §10–§11 |
+| Video context | **Real yt-dlp + ffmpeg** download/trim; **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context`. **Cloud Run:** Deno in image for yt-dlp; YouTube `player_client` `android` + `web` (no browser cookies in v1); datacenter IPs may hit bot/sign-in blocks — see §11 |
 | Agent orchestration | **Thin `PipelineRunner`** — `WatcherAgent` → `StrategistAgent` → `WriterAgent` → `EditorLinter` (rule-based, non-blocking) → `GraphifyService`; pitch as CrewAI-style, no CrewAI library |
 | Mapper | **`GraphifyService`** — subprocess `graphify extract` when LLM keys available; **heuristic** graph fallback otherwise |
 | Graph UI | **D3.js** (`app/static/js/graph.js`) — `graph.json` embedded in `newsroom.html` |
 | Mock modes | See §10.1 — `MOCK_LLM` / missing GCP vs `PRESSPLAY_USE_MOCK=1` |
-| Auth (v1) | **Guest sessions** (no signup): signed HTTP-only cookie `pressplay_session`; optional **`X-PressPlay-Session`** header for API clients; `session_token` on `POST /api/v1/jobs` response. Optional site gate: **`PRESSPLAY_DEMO_SECRET`** (orthogonal to guest ownership) |
-| Rate limits | **~5 jobs / hour** per `(guest_session_id, client_ip)` in Postgres when `DATABASE_URL` set; else in-memory per IP. **Max 2 concurrent** jobs (**locked** for v1; see §17) |
+| Auth (v1) | **Guest sessions** (no signup): signed HTTP-only cookie `pressplay_session`; optional **`X-PressPlay-Session`** header for API clients; `session_token` on `POST /api/v1/jobs` response. Optional site gate: **`PRESSPLAY_DEMO_SECRET`** only when explicitly set (not production default) |
+| Rate limits | **Layered** — per `(guest_session_id, client_ip)` hourly cap + per-IP hourly cap + min seconds between jobs from same IP (`enforce_job_creation_limits` in `abuse_guard.py`). Postgres when `DATABASE_URL` set; in-memory equivalent otherwise. **Max 2 concurrent** jobs globally (**locked** for v1; see §17) |
 | Full mode cap | **1 hour** max source video length |
 
 ---
@@ -97,7 +100,7 @@
 
 ### 4.3 Mode selection (UI)
 
-- Form fields: **YouTube URL**, **mode** (`quick` \| `full`), optional **quick_minutes** (5–20), optional **demo secret** (if env set).
+- Form fields: **YouTube URL**, **mode** (`quick` \| `full`), **`vertical`** (`events` \| `technical` \| `sports` \| `corp`), optional **quick_minutes** (5–20). Optional **demo secret** only if `PRESSPLAY_DEMO_SECRET` is set (not production).
 - HTMX submits to `POST /api/jobs`; polls until `done`, then links to **`/newsroom/{id}`**.
 
 ---
@@ -159,7 +162,7 @@ flowchart TB
 ### 5.1 Pipeline steps
 
 1. **Ingestion:** User submits YouTube URL + mode on index. HTMX `POST /api/jobs` creates job; progress partial polls until `done`.
-2. **Download:** `YouTubeService` validates YouTube URL, downloads via **yt-dlp**, trims with **ffmpeg** (Quick window or Full up to 1h). Skipped when `PRESSPLAY_USE_MOCK=1`.
+2. **Download:** `YouTubeService` validates YouTube URL, downloads via **yt-dlp** (`_base_ydl_opts`: retries, `player_client` `android`/`web` for server IPs), trims with **ffmpeg** (Quick window or Full up to 1h). Skipped when `PRESSPLAY_USE_MOCK=1`. **Cloud/datacenter IPs** (Cloud Run) may be blocked by YouTube (“not a bot”, sign-in); v1 has **no cookie/account flow** — user-facing `DownloadError` text explains workarounds (other video, retry, run locally).
 3. **Context extraction:** `MemvidService` runs **`memvid put`** on local file → **unified_context** (Whisper transcript + visual search snippets). Temp video deleted after ingest. Full mock uses `extract_context_stub`.
 4. **Watcher:** `WatcherAgent` → `generate_structured(..., WatcherOutput)` — summary + timestamped **claims**; claim normalization (`_normalize_claims`); **retry** once if claims empty but summary non-empty; warning logs.
 5. **Strategist:** `StrategistAgent` → `StrategistOutput` — editorial brief (angle, audience, thread hook, omit topics) from summary + claims; optional vertical hint in prompt (API accepts `vertical`; pipeline may omit — see §7.2).
@@ -167,9 +170,9 @@ flowchart TB
 7. **Editor:** `EditorLinter.lint` — rule-based checks (banned phrases, tweet length/count, reading level); **non-blocking** (`EditorReport` persisted; pipeline continues).
 8. **Mapper:** `GraphifyService.build_graph_with_source` — `graphify` \| `heuristic`; `_build_graph_sync` runs CLI in thread (fixed method nesting — CLI path works).
 9. **Persistence:** `get_results_repo().save(..., guest_session_id=...)` → Postgres `press_kits` row when `DATABASE_URL` set (blog, tweets, graph, claims, audit columns, `vertical`, mock flags); optional mirror under `data/results/{id}/` when using filesystem fallback. `workflow_status=draft`; `result_url` `/newsroom/{id}`.
-10. **Webhook:** If `webhook_url` set on job, `app/services/webhooks.py` POSTs JSON payload on **done** or **failed** (async, best-effort).
+10. **Webhook:** If `webhook_url` set on job, `app/services/webhooks.py` POSTs JSON payload on **done** or **failed** (async, best-effort), including **ingest-stage failures** (`DownloadError`, `MemvidError`).
 
-**Startup (Postgres):** `lifespan` runs `init_db()`, **stale job sweep** (in-flight jobs → `failed` with “Interrupted by server restart”), then serves traffic.
+**Startup (Postgres):** Container runs **`scripts/migrate_with_retry.sh`** before `uvicorn` (Alembic retries until Cloud SQL socket is up). `lifespan` runs `init_db()`, **`wait_for_db_connection()`** (up to 30×2s), **stale job sweep** (in-flight jobs → `failed` with “Interrupted by server restart”), then serves traffic.
 
 ### 5.2 Job state machine
 
@@ -207,20 +210,24 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | Editorial: save, workflow, partial regen | **Shipped** | `/newsroom/{id}/save`, `/api/jobs/{id}/regenerate` |
 | Watcher claims + `claims.json` | **Shipped** | Citations on newsroom with jump links |
 | `GET /health` | **Shipped** | Liveness for Docker / Cloud Run |
-| YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1` |
+| YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1`; Cloud Run mitigations + bot/sign-in error mapping |
+| Job ID validation (`job_ids.py`) | **Shipped** | Malformed UUID on poll/export → **404** (not 500) |
+| `HEAD /` | **Shipped** | `200` empty body for uptime probes |
+| Cold start (DB + migrations) | **Shipped** | `migrate_with_retry.sh`; `wait_for_db_connection` in lifespan |
 | MemvidService (CLI ingest) | **Shipped** | Requires local `memvid` + Whisper models; see blockers §17 |
 | WatcherAgent / WriterAgent | **Shipped** | Structured `WatcherOutput` + `WriterOutput`; Vertex when GCP set; mock JSON with sample claims when `should_mock_llm()` |
 | Watcher claim hygiene | **Shipped** | `_normalize_claims`, empty-claims retry, completion logging |
 | StrategistAgent | **Shipped** | `StrategistOutput`; `strategist_brief.json` / DB column |
 | EditorLinter | **Shipped** | Rule-based; `editor_report.json` / DB column; does not fail jobs |
-| Vertical brand packs | **Shipped** | `config/brand-sports.yaml`, `brand-events.yaml`, `brand-corp.yaml`; `BrandVertical` enum; HTMX + v1 `vertical` |
+| Vertical brand packs | **Shipped** | `config/brand-{sports,events,corp,technical}.yaml`; `BrandVertical` enum; HTMX + v1 `vertical` (UI: General event, Technical Event, Sports post-game, Internal corporate comms) |
+| Abuse guard (open prod) | **Shipped** | `app/services/abuse_guard.py`; honeypot on `POST /api/jobs`; production limits in `deploy.yml` |
 | Audit artifacts | **Shipped** | `claims.json`, `unified_context.txt` under `data/results/{id}/` (and DB when configured) |
 | GraphifyService | **Shipped** | CLI when keys + binary present; `_build_graph_sync` correctly scoped on class; heuristic/stub fallback |
 | Postgres + guest sessions | **Shipped** | `DATABASE_URL`, Alembic `001_initial_schema`, `guest_sessions` / `jobs` / `press_kits` / `rate_limit_events`; `GuestSessionMiddleware`; ownership 404 across guests |
 | `GET /health/ready` | **Shipped** | Postgres `SELECT 1`; compose healthcheck on `newsroom` |
-| DB rate limiter | **Shipped** | `app/services/rate_limit_db.py`; `check_rate_limit()` in `app/api/deps.py` |
+| DB rate limiter | **Shipped** | `app/services/abuse_guard.py` (`DbAbuseGuard`); `rate_limit_db.py` wrapper; `check_rate_limit()` in `app/api/deps.py` |
 | Stale job sweep | **Shipped** | `app/db/startup.py` on app lifespan |
-| pytest + CI | **Shipped** | `tests/` (guest cookie, ownership, health); `.github/workflows/ci.yml` |
+| pytest + CI | **Shipped** | `tests/` (guest cookie, ownership, health, `test_abuse_guard.py`); `.github/workflows/ci.yml` |
 | `scripts/smoke_mvp.sh` | **Shipped** | End-to-end health → guest → mock job → newsroom |
 | Partial regen + Strategist/Editor | **Gap** | `regen.py` re-runs Writer/Graphify only — no Strategist or Editor on regen |
 | Editor + vertical packs | **Gap** | `EditorLinter` uses default `brand_banned_phrases()` — not job `vertical` yet |
@@ -228,7 +235,7 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | D3 newsroom graph | **Shipped** | `app/static/js/graph.js` |
 | JobStore + rate limit + concurrent cap (2) | **Shipped** | `DbJobStore` or legacy `JobStore`; `check_concurrent_cap()` async |
 | ResultsRepository + past runs on `/` | **Shipped** | Guest-scoped `list_recent`; Postgres or FS; manifest fields include mock flags, `workflow_status`, `vertical`, audit JSON |
-| GCP production deploy | **Shipped** | Cloud Run + Cloud SQL + Secret Manager; `deploy.yml`; `docs/DEPLOY_GCP.md`; demo gate |
+| GCP production deploy | **Shipped** | Cloud Run + Cloud SQL + Secret Manager; `deploy.yml`; `docs/DEPLOY_GCP.md`; **open access** + abuse limits |
 | GitHub deploy workflow | **Shipped** | `.github/workflows/deploy.yml` — build `linux/amd64` → AR → Cloud Run; prints HTTPS URL |
 | `scripts/gcp-cloudrun-bootstrap.sh` | **Shipped** | Cloud SQL, secrets, firewall cleanup, Cloud Run deploy |
 | Legacy VM path | **Deprecated** | `pressplay-vm`, `docker-compose.prod.yml`, `scripts/gcp-bootstrap.sh` — not used by CI |
@@ -328,7 +335,7 @@ Persisted as **`strategist_brief.json`** (filesystem) or `strategist_brief` JSON
 
 `claim_refs` is optional — 0-based indices into the Watcher claims list for key blog statements.
 
-**Vertical packs:** `BrandVertical` = `sports` \| `events` \| `corp` (default **`events`**). Each pack supplies `tone`, `voice`, `banned_phrases`, `hashtag_policy`, `max_tweet_chars`.
+**Vertical packs:** `BrandVertical` = `sports` \| `events` \| `corp` \| `technical` (default **`events`**). UI label for `technical`: **Technical Event**. Each pack supplies `tone`, `voice`, `banned_phrases`, `hashtag_policy`, `max_tweet_chars`.
 
 ### 7.4 The Editor (implementation: `app/services/agents/editor.py`)
 
@@ -378,7 +385,7 @@ Graphify’s native `graph.json` is adapted to this shape in a small Python mapp
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/` | Form + **guest-scoped** list of recent press kits |
+| `GET` / `HEAD` | `/` | Form + **guest-scoped** recent press kits (`HEAD` → `200` for probes) |
 | `POST` | `/api/jobs` | Create job (HTMX); returns progress partial |
 | `GET` | `/api/jobs/{id}` | Poll status / stage (HTMX `every 2s`) |
 | `GET` | `/newsroom/{id}` | Shareable results: blog, tweets, D3 graph, citations, editorial UI |
@@ -391,7 +398,7 @@ Graphify’s native `graph.json` is adapted to this shape in a small Python mapp
 | `POST` | `/newsroom/{id}/workflow` | `draft` → `in_review` → `approved` → `published` |
 | `POST` | `/api/jobs/{id}/regenerate` | Partial regen: `tweets`, `blog`, or `graph` |
 
-**HTMX `POST /api/jobs` form fields:** `youtube_url`, `mode` (`quick` \| `full`), **`vertical`** (`sports` \| `events` \| `corp`, default `events`), optional `quick_minutes` (5–20), optional `secret` (required when `PRESSPLAY_DEMO_SECRET` is set).
+**HTMX `POST /api/jobs` form fields:** `youtube_url`, `mode` (`quick` \| `full`), **`vertical`** (`sports` \| `events` \| `corp` \| `technical`, default `events`), optional `quick_minutes` (5–20), hidden honeypot `website` (must be empty), optional `secret` (only when `PRESSPLAY_DEMO_SECRET` is set).
 
 **JSON `POST /api/v1/jobs` body:**
 
@@ -406,11 +413,11 @@ Graphify’s native `graph.json` is adapted to this shape in a small Python mapp
 }
 ```
 
-Validation: `parse_brand_vertical()` in `app/api/job_creation.py` — invalid values return 400 with message `vertical must be 'sports', 'events', or 'corp'.`
+Validation: `parse_brand_vertical()` in `app/api/job_creation.py` — invalid values return 400 with message `vertical must be 'sports', 'events', 'corp', or 'technical'.`
 
 **Response:** `{ "id", "status", "poll_url", "session_token" }` — `session_token` is the signed guest cookie value for programmatic clients (also set via `Set-Cookie` on first request). Header `X-PressPlay-Secret` accepted when demo secret is enabled. Header **`X-PressPlay-Session`** carries the same signed token as the cookie for non-browser clients.
 
-**Access control:** Poll, newsroom, export, editorial, and regen require the job/press kit to belong to the current guest (404 if not — no cross-guest leakage).
+**Access control:** Poll, newsroom, export, editorial, and regen require the job/press kit to belong to the current guest (404 if not — no cross-guest leakage). **Job IDs** must be valid UUIDs (`parse_job_id` in `app/api/job_ids.py`); malformed paths return **404** before store lookup.
 
 **`POST /api/jobs/{id}/regenerate` form field:** `part` = `tweets` \| `blog` \| `graph` (no re-ingest; uses `summary.txt`, `claims.json`, and on-disk blog). **Known gap:** does **not** re-run Strategist or Editor; Writer regen uses summary + claims + **`vertical` from manifest** when present (Postgres / persisted manifest).
 
@@ -423,8 +430,8 @@ Validation: `parse_brand_vertical()` in `app/api/job_creation.py` — invalid va
 ```text
 pressplay/
 ├── run.sh                        # deps, Memvid/Whisper checks, ADC/SA, --verify-llm
-├── Dockerfile                    # ffmpeg, memvid-sdk, best-effort whisper-small
-├── docker-compose.yml            # Postgres 16 + newsroom; Alembic on start
+├── Dockerfile                    # ffmpeg, Deno (yt-dlp), COPY config/, memvid-sdk, whisper-small
+├── docker-compose.yml            # Postgres 16 + newsroom; migrate_with_retry on start
 ├── alembic.ini
 ├── pytest.ini
 ├── requirements.txt              # sqlalchemy, asyncpg, alembic, itsdangerous, pytest
@@ -434,6 +441,7 @@ pressplay/
 │   ├── brand-sports.yaml         # vertical pack (sports post-game)
 │   ├── brand-events.yaml         # default vertical pack
 │   ├── brand-corp.yaml           # internal corporate comms
+│   ├── brand-technical.yaml      # technical events (conferences, keynotes, launches)
 │   └── brand.yaml.example        # legacy single-file override
 ├── alembic/                      # Postgres migrations (when DATABASE_URL set)
 ├── docs/
@@ -447,7 +455,8 @@ pressplay/
 │   │   ├── routes_v1.py          # JSON API + export
 │   │   ├── routes_editorial.py   # save, workflow, regen
 │   │   ├── job_creation.py       # shared create_pressplay_job(guest_session_id)
-│   │   ├── deps.py               # rate limit, concurrent cap, demo secret
+│   │   ├── job_ids.py            # parse_job_id → 404 on malformed UUID
+│   │   ├── deps.py               # rate limit, concurrent cap, optional demo secret
 │   │   └── deps_guest.py         # get_current_guest, get_guest_id
 │   ├── middleware/
 │   │   └── guest_session.py      # cookie + X-PressPlay-Session
@@ -471,7 +480,8 @@ pressplay/
 │   │   ├── graphify.py
 │   │   ├── results_repo.py       # filesystem persistence (legacy dev)
 │   │   ├── guest_sessions.py     # guest_sessions CRUD
-│   │   ├── rate_limit_db.py      # Postgres sliding-window rate limit
+│   │   ├── abuse_guard.py        # layered rate limits, cooldown, honeypot helper
+│   │   ├── rate_limit_db.py      # Postgres wrapper → DbAbuseGuard
 │   │   └── agents/
 │   │       ├── watcher.py
 │   │       ├── strategist.py
@@ -510,7 +520,12 @@ pressplay/
 │   ├── conftest.py
 │   ├── test_health.py
 │   ├── test_guest_session.py
-│   └── test_ownership.py
+│   ├── test_ownership.py
+│   ├── test_abuse_guard.py      # honeypot + in-memory abuse limits
+│   ├── test_job_ids.py
+│   ├── test_index_head.py
+│   ├── test_youtube.py
+│   └── test_youtube_errors.py
 ├── .github/workflows/
 │   ├── ci.yml                    # pytest + Alembic on PR/push to main
 │   └── deploy.yml                # Cloud Run deploy after CI on main
@@ -524,6 +539,7 @@ pressplay/
     ├── cleanup_ttl.py
     ├── smoke_mvp.sh              # health → guest → job → newsroom
     ├── migrate_fs_to_db.py       # optional FS → Postgres import
+    ├── migrate_with_retry.sh     # Alembic retry loop (Cloud SQL cold start)
     ├── gcp-cloudrun-bootstrap.sh # production bootstrap (Cloud SQL + Cloud Run)
     ├── gcp-bootstrap.sh          # legacy VM bootstrap (deprecated)
     └── gcp-vm-startup.sh         # legacy VM Docker install
@@ -541,13 +557,15 @@ pressplay/
 | `GOOGLE_APPLICATION_CREDENTIALS` | *(unset locally)* | **Local Docker Compose only:** `/secrets/gcp.json` from `secrets/gcp-sa.json`; **not** used on Cloud Run |
 | `MOCK_LLM` | `false` | `true` → stub Watcher/Writer; **real** yt-dlp + Memvid |
 | `PRESSPLAY_USE_MOCK` | *(empty)* | `1` → **full fast mock** (skip ingest); `0` → force real ingest even without GCP |
-| `MAX_CONCURRENT_JOBS` | `2` | **Locked** for v1 |
-| `RATE_LIMIT_PER_HOUR` | `5` | Per client IP |
+| `MAX_CONCURRENT_JOBS` | `2` | **Locked** for v1; global active pipeline cap |
+| `RATE_LIMIT_PER_HOUR` | `5` | Per `(guest_session_id, client_ip)` per rolling hour (local default) |
+| `RATE_LIMIT_PER_IP_PER_HOUR` | `10` | Per client IP across all guest sessions (local default) |
+| `RATE_LIMIT_MIN_INTERVAL_SECONDS` | `60` | Minimum seconds between job creations from same IP (local default) |
 | `QUICK_MINUTES_DEFAULT` | `10` | Allowed range 5–20 |
 | `QUICK_MINUTES_MIN` / `MAX` | `5` / `20` | Server-enforced |
 | `FULL_MAX_VIDEO_SECONDS` | `3600` | 1 hour |
 | `RESULTS_TTL_HOURS` | `72` | `scripts/cleanup_ttl.py` |
-| `PRESSPLAY_DEMO_SECRET` | *(unset locally)* | Optional shared-secret gate; **set in production** via Secret Manager `pressplay-demo-secret` on Cloud Run |
+| `PRESSPLAY_DEMO_SECRET` | *(unset)* | Optional shared-secret gate for **private demos only**; **not** mounted on Cloud Run by `deploy.yml` |
 | `SESSION_SECRET` (production) | Secret Manager | `pressplay-session-secret` — not in `.env` on Cloud Run |
 | `DATABASE_URL` (production) | Secret Manager | `pressplay-database-url` — Cloud SQL unix socket (`/cloudsql/...`) |
 | `GRAPHIFY_BIN` | *(auto)* | Override path to `graphify` binary |
@@ -556,7 +574,18 @@ pressplay/
 | `SESSION_SECRET` | *(required in compose / .env)* | Cookie signing; use literal hex from `openssl rand -hex 32` in `.env` (no shell `$(...)` in file) |
 | `GUEST_SESSION_TTL_DAYS` | `30` | Guest session lifetime |
 
-**Optional auth:** If `PRESSPLAY_DEMO_SECRET` is set, require matching form field `secret` or `X-PressPlay-Secret` header. If unset, no auth.
+**Optional auth:** If `PRESSPLAY_DEMO_SECRET` is set, require matching form field `secret` or `X-PressPlay-Secret` header. Production deploy leaves this unset (open site).
+
+**Production abuse defaults** (set in `.github/workflows/deploy.yml` `--set-env-vars`, overridable):
+
+| Env var | Cloud Run value | Purpose |
+|---------|-----------------|--------|
+| `RATE_LIMIT_PER_HOUR` | `5` | Per guest session + IP |
+| `RATE_LIMIT_PER_IP_PER_HOUR` | `12` | Per IP (mitigates new guest cookies) |
+| `RATE_LIMIT_MIN_INTERVAL_SECONDS` | `90` | Cooldown between jobs from same IP |
+| `MAX_CONCURRENT_JOBS` | `2` | Global concurrent pipelines |
+
+**HTMX honeypot:** hidden form field `website`; non-empty → `400` (`ValidationError: Invalid submission.`). Bots only; API clients unaffected.
 
 ### 10.1 Mock & demo modes (implemented)
 
@@ -591,8 +620,12 @@ See `README.md` for command examples.
 ## 11. Guardrails & Error Handling
 
 - **YouTube only** — reject non-YouTube URLs; handle private/unavailable/live-not-ready with clear HTMX error partials.
-- **Concurrent cap** — max 2 active pipelines (`DbJobStore.active_count_async` when Postgres enabled).
-- **Rate limit** — ~5 job creations per hour per `(guest_session_id, client_ip)` (Postgres) or per IP (legacy).
+- **YouTube on cloud IPs** — Cloud Run/datacenter egress often triggers “confirm you're not a bot” or sign-in challenges. v1: **no cookies or account sign-in**; app uses `android`/`web` `player_client`, Deno in the container image, and maps failures to actionable job errors. **Workarounds:** another public video, retry later, or run PressPlay locally (residential IP). See `docs/DEPLOY_GCP.md` § YouTube downloads on Cloud Run.
+- **Malformed job IDs** — non-UUID `job_id` path segments → **404** via `parse_job_id()` (HTMX poll and v1 JSON/export).
+- **Concurrent cap** — max 2 active pipelines globally (`DbJobStore.active_count_async` when Postgres enabled).
+- **Rate limits** — `enforce_job_creation_limits()` (`app/services/abuse_guard.py`): per `(guest_session_id, client_ip)` hourly cap, per-IP hourly cap, and minimum interval between jobs from the same IP. Returns **429** with user-facing messages.
+- **Honeypot** — HTMX `POST /api/jobs` rejects non-empty hidden `website` field.
+- **Optional demo secret** — when `PRESSPLAY_DEMO_SECRET` is set only (not production default).
 - **Guest ownership** — cross-guest access to jobs/newsrooms returns **404** (not 403).
 - **Stale jobs** — in-flight jobs marked `failed` on server restart when using Postgres.
 - **Quick mode** — server-side enforce 5–20 minute processing window.
@@ -624,10 +657,11 @@ See `README.md` for command examples.
 |--------|---------|
 | `pressplay-session-secret` | `SESSION_SECRET` |
 | `pressplay-database-url` | `DATABASE_URL` (asyncpg + `/cloudsql/PROJECT:REGION:pressplay-db`) |
-| `pressplay-demo-secret` | `PRESSPLAY_DEMO_SECRET` |
 | `pressplay-db-password` | Used when building `pressplay-database-url` |
 
-**CI/CD:** Push to `main` → `ci.yml` (pytest) → `deploy.yml` (build/push image, Cloud SQL proxy + `alembic upgrade head`, `gcloud run deploy`, print HTTPS URL in job summary).
+**Cloud Run env (not secrets):** `GCP_PROJECT_ID`, `GCP_LOCATION`, `DEBUG=false`, plus abuse limits — see §10 production table.
+
+**CI/CD:** Push to `main` → `ci.yml` (pytest) → `deploy.yml` (build/push image, Cloud Run start command runs `scripts/migrate_with_retry.sh` then `uvicorn`, `gcloud run deploy`, print HTTPS URL and abuse-limit summary in job log).
 
 **GitHub Actions variables:** `GCP_PROJECT_ID`, `GCP_REGION`, `GCP_AR_REPOSITORY`, `GCP_IMAGE_NAME`, `GCP_CLOUD_RUN_SERVICE`, `GCP_SQL_INSTANCE`. No GitHub secrets required when WIF is configured.
 
@@ -645,7 +679,7 @@ See `README.md` for command examples.
 
 ### 12.3 Local development — `docker-compose.yml`
 
-**Postgres 16** + API on **`http://localhost:8000`**. Alembic on container start; guest session middleware; optional `secrets/gcp-sa.json` mount for Vertex in Docker.
+**Postgres 16** + API on **`http://localhost:8000`**. `migrate_with_retry.sh` on container start; guest session middleware; optional `secrets/gcp-sa.json` mount for Vertex in Docker.
 
 ```yaml
 services:
@@ -676,7 +710,9 @@ services:
 
 ### 12.5 Container image
 
-`Dockerfile`: Python 3.11-slim, `ffmpeg`, `curl`, pip deps; `memvid-sdk` + best-effort `whisper-small` at build. **Cloud Run:** `uvicorn` on `$PORT` (8000); Alembic runs in **CI deploy step**, not at container boot (fast cold start).
+`Dockerfile`: Python 3.11-slim; `ffmpeg`, `curl`, **Deno** (yt-dlp JS runtime on server IPs); pip deps; **`COPY config/`** (vertical brand packs required at runtime); `memvid-sdk` + best-effort `whisper-small` at build.
+
+**Cloud Run / Compose start:** `sh scripts/migrate_with_retry.sh && exec uvicorn …` — Alembic retries until Postgres/Cloud SQL is reachable, then app lifespan runs **`wait_for_db_connection()`** before stale-job sweep.
 
 **Memvid:** Operators should verify `memvid` CLI + `whisper-small` in the image or accept ingest limitations — see §17.
 
@@ -690,14 +726,15 @@ services:
 
 - Positioning copy: **press kit factory** (auditable blog, social, graph; citations; editorial workflow)
 - YouTube URL input
-- **Content vertical** select: `events` (default) \| `sports` \| `corp`
+- **Content vertical** select: `events` (default, “General event”) \| `technical` (“Technical Event”) \| `sports` \| `corp`
 - Mode toggle: **Quick** / **Full**
 - Quick mode: duration control (**5–20 min**, default 10)
-- Submit → HTMX `hx-post="/api/jobs"` → `partials/job_progress.html`
+- Submit → HTMX `hx-post="/api/jobs"` → `partials/job_progress.html` (script clears `#loading-state` `htmx-request` after swap so the button does not stay disabled)
 - Poll `GET /api/jobs/{id}` (`hx-trigger="every 2s"`) until `done` → link to `/newsroom/{id}`
 - **Your recent press kits** from `list_recent(guest_session_id)` (guest-scoped)
 - Optional banner: guest session expiry (`guest_expires`, `guest_session_days`)
-- **Demo secret** field when `PRESSPLAY_DEMO_SECRET` is set (production Cloud Run); required to submit jobs
+- Hidden honeypot field `website` (off-screen; must stay empty)
+- **Demo secret** field only when `PRESSPLAY_DEMO_SECRET` is set (optional private demos; **not** on production Cloud Run)
 
 ### 13.2 Newsroom (`newsroom.html`)
 
@@ -729,7 +766,7 @@ services:
 | 8 Phase 0 — Stability | Watcher claim normalization/retry; audit `unified_context.txt`; Graphify `_build_graph_sync` fix; save() vertical param | **Done** |
 | 9 Phase 1 — Writing team | Strategist + Editor linter; pipeline stages; brand vertical packs | **Done** |
 | 10 Postgres MVP | `DATABASE_URL`, Alembic, guest sessions, docker-compose DB | **Done** |
-| 11 Deploy | Cloud Run, HTTPS, demo secret, CI/CD | **Done** |
+| 11 Deploy | Cloud Run, HTTPS, open access + abuse limits, CI/CD | **Done** |
 
 ---
 
@@ -760,7 +797,7 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 | `guest_sessions` | `id` (UUID PK), `created_at`, `expires_at`, `last_seen_at` |
 | `jobs` | Pipeline state; `guest_session_id` FK; `status`, `stage`, `progress_*`, `mode`, `youtube_url`, `quick_minutes`, `vertical`, `error`, `result_url`, `webhook_url`, timestamps |
 | `press_kits` | Editorial artifacts; same `id` as job when complete; `guest_session_id` FK; `blog_post`, `tweets`/`graph`/`claims` JSONB, audit columns, `workflow_status`, mock flags |
-| `rate_limit_events` | Sliding-window job creation limits per guest + IP |
+| `rate_limit_events` | Sliding-window job creation events for abuse guard (per guest + IP; IP-wide counts derived in queries) |
 
 **Guest session flow (`app/middleware/guest_session.py`):**
 
@@ -821,7 +858,12 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 - [x] **Phase 1 writing team** — Strategist, Editor linter, extended pipeline stages
 - [x] **Vertical brand packs** — `brand-{vertical}.yaml`, job/API `vertical`
 - [x] **Postgres MVP** — `DATABASE_URL`, guest sessions, Alembic, ownership, `/health/ready`, CI, `smoke_mvp.sh`
-- [x] **GCP production deploy** — Cloud Run HTTPS, Cloud SQL, Secret Manager, `deploy.yml`, `PRESSPLAY_DEMO_SECRET`, `docs/DEPLOY_GCP.md`
+- [x] **GCP production deploy** — Cloud Run HTTPS, Cloud SQL, Secret Manager, `deploy.yml`, `docs/DEPLOY_GCP.md`
+- [x] **Open production + abuse guard** — no demo secret on deploy; `abuse_guard.py`, honeypot, per-IP limits, production env in `deploy.yml`
+- [x] **Technical Event vertical** — `BrandVertical.technical`, `config/brand-technical.yaml`, index select option
+- [x] **Cloud Run cold start** — `migrate_with_retry.sh`, `wait_for_db_connection`, Dockerfile `COPY config/`
+- [x] **YouTube + Cloud Run** — Deno, `player_client`, datacenter IP error mapping; no cookies in v1
+- [x] **API hardening** — `job_ids.py` (404 on bad UUID), `HEAD /`, webhooks on ingest failure
 - [x] **`brand_banned_phrases` / `brand_max_tweet_chars`** — restored in `app/services/brand.py` for EditorLinter
 
 ### Still open / blockers
@@ -845,7 +887,7 @@ Decisions captured as **product direction**. Only items marked **shipped** exist
 | Theme | Decision | Status |
 |-------|----------|--------|
 | **Positioning** | Press kit **factory** with governance first; “head of media” automation is **Phase 3**, not v1 | **Direction** |
-| **Verticals** | All three beats via **brand packs** (`sports`, `events`, `corp`) | **Shipped** (packs + job `vertical`) |
+| **Verticals** | Beats via **brand packs** (`sports`, `events`, `corp`, `technical`) | **Shipped** (packs + job `vertical`) |
 | **Grounding** | **Human review MVP** — citations + workflow; automated **coverage gate** (claim ↔ copy) | **Phase 2** (not built) |
 | **Voice** | Brand voice evolves from **published kits** only (learn from approved output) | **Future** |
 | **Memvid** | **Dual index:** per-video ingest (shipped) + **org corpus** Memvid for cross-event context | **Per-video shipped**; **org corpus Phase 2** |
@@ -862,6 +904,7 @@ Decisions captured as **product direction**. Only items marked **shipped** exist
 | **0** | Stability, audit artifacts, Graphify/Watcher/save fixes | **Shipped** |
 | **1** | Strategist + Editor + vertical brand packs | **Shipped** |
 | **1b** | Postgres persistence, guest sessions, deploy polish (CI, smoke test) | **Shipped** |
-| **1c** | Cloud Run + Cloud SQL production, HTTPS, demo secret, GitHub deploy workflow | **Shipped** |
+| **1c** | Cloud Run + Cloud SQL production, HTTPS, open access, abuse limits, GitHub deploy workflow | **Shipped** |
+| **1d** | `technical` vertical (Technical Event brand pack) | **Shipped** |
 | **2** | Coverage gates, org Memvid corpus, stronger grounding automation | **Planned** |
 | **3** | Head-of-media orchestration, conditional auto-publish, GCS backup, calendar, registered users | **Planned** |

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.config import get_settings
+from app.domain.errors import DownloadError, MemvidError
 from app.domain.models import JobStatus, PressKitResult, WorkflowStatus
 from app.repositories.factory import get_job_store, get_results_repo
 from app.services.agents.editor import EditorLinter
@@ -153,10 +154,24 @@ class PipelineRunner:
                 result_url=result_url,
                 youtube_url=job.youtube_url,
             )
+        except (DownloadError, MemvidError) as exc:
+            logger.warning("Pipeline stage failed for job %s: %s", job_id, exc)
+            await self.job_store.update_status(
+                job_id, JobStatus.FAILED, error=str(exc)
+            )
+            schedule_webhook(
+                job.webhook_url,
+                job_id=job_id,
+                status=JobStatus.FAILED.value,
+                result_url=None,
+                youtube_url=job.youtube_url,
+            )
         except Exception as exc:
             logger.exception("Pipeline failed for job %s", job_id)
             await self.job_store.update_status(
-                job_id, JobStatus.FAILED, error=str(exc)
+                job_id,
+                JobStatus.FAILED,
+                error="Press kit generation failed. Please try again.",
             )
             schedule_webhook(
                 job.webhook_url,

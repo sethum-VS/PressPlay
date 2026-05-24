@@ -1,0 +1,22 @@
+"""YouTube download error mapping."""
+
+from app.services.youtube import YouTubeService
+
+
+def test_map_download_error_sign_in_phrases() -> None:
+    msg = YouTubeService._map_download_error(
+        Exception("ERROR: Sign in to confirm you're not a bot")
+    )
+    assert "sign-in" in msg.lower()
+
+
+def test_map_download_error_does_not_false_positive_on_login_substring() -> None:
+    raw = "ERROR: unable to download video data: HTTP Error 403: Forbidden"
+    msg = YouTubeService._map_download_error(Exception(raw))
+    assert "sign-in" not in msg.lower()
+    assert "403" in msg or "Forbidden" in msg or "download" in msg.lower()
+
+
+def test_base_ydl_opts_includes_youtube_player_client() -> None:
+    opts = YouTubeService._base_ydl_opts()
+    assert opts["extractor_args"]["youtube"]["player_client"] == ["android", "web"]

@@ -38,6 +38,20 @@ class YouTubeService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
+    @staticmethod
+    def _base_ydl_opts() -> dict:
+        """Defaults for server/datacenter IPs (e.g. Cloud Run) and current YouTube player."""
+        return {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "retries": 3,
+            "fragment_retries": 3,
+            "socket_timeout": 30,
+            # Prefer clients that work without browser cookies on cloud IPs.
+            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+        }
+
     def validate_url(self, url: str) -> str:
         url = url.strip()
         if not url:
@@ -66,14 +80,13 @@ class YouTubeService:
         with tempfile.TemporaryDirectory(prefix="pressplay-caps-") as tmp:
             out = Path(tmp) / "captions"
             ydl_opts = {
+                **self._base_ydl_opts(),
                 "skip_download": True,
                 "writesubtitles": True,
                 "writeautomaticsub": True,
                 "subtitleslangs": ["en", "en-US", "en-GB"],
                 "subtitlesformat": "vtt",
                 "outtmpl": str(out),
-                "quiet": True,
-                "no_warnings": True,
             }
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -134,12 +147,9 @@ class YouTubeService:
         section = self._section_spec(max_seconds)
 
         ydl_opts: dict = {
+            **self._base_ydl_opts(),
             "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
             "outtmpl": raw_template,
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "retries": 3,
             "download_sections": [section],
             "force_keyframes_at_cuts": True,
         }
@@ -258,7 +268,32 @@ class YouTubeService:
             return "Age-restricted videos cannot be downloaded without sign-in (not supported in v1)."
         if "copyright" in text or "blocked" in text:
             return "This video cannot be downloaded due to platform restrictions."
-        if "sign in" in text or "login" in text:
+        if any(
+            phrase in text
+            for phrase in (
+                "not a bot",
+                "confirm you're",
+                "confirm you’re",
+                "unusual traffic",
+                "captcha",
+            )
+        ):
+            return (
+                "YouTube blocked automated download from this server (common on cloud IPs). "
+                "Try again later, pick another public video, or run PressPlay locally. "
+                "Sign-in and cookies are not supported in v1."
+            )
+        if any(
+            phrase in text
+            for phrase in (
+                "sign in to confirm",
+                "sign in to continue",
+                "please sign in",
+                "login required",
+                "requires login",
+                "use --cookies",
+            )
+        ):
             return "This video requires sign-in and is not supported in v1."
         raw = str(exc).strip()
         return raw[:400] if raw else "YouTube download failed."

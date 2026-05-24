@@ -1,0 +1,25 @@
+# Technical event brand pack — conferences, keynotes, product launches (vertical=technical)
+
+name: "Technical Event Communications"
+
+tone: >-
+  Precise, credible, and accessible to a technical audience. Lead with what was announced,
+  demonstrated, or proven. Prefer specs, metrics, and named technologies over marketing fluff.
+
+voice: >-
+  Third-person editorial for the blog; crisp and informative for social. Define acronyms on
+  first use in the blog; tweets may assume domain familiarity when the event context is clear.
+
+banned_phrases:
+  - "game-changing"
+  - "revolutionary"
+  - "disruptive"
+  - "next-level"
+  - "you won't believe"
+  - "literally unbelievable"
+  - "insane"
+
+hashtag_policy: >-
+  Max 2 hashtags per tweet; prefer event, product, or org tags. Avoid generic hype tags.
+
+max_tweet_chars: 280

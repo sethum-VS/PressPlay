@@ -30,9 +30,9 @@ Production is **open** (no shared password). Abuse protection is enforced in-app
 
 | Control | Production value | Env var |
 |---------|------------------|---------|
-| Per guest session + IP | 3 jobs / hour | `RATE_LIMIT_PER_HOUR` |
-| Per IP (all sessions) | 8 jobs / hour | `RATE_LIMIT_PER_IP_PER_HOUR` |
-| Cooldown between jobs | 120 seconds | `RATE_LIMIT_MIN_INTERVAL_SECONDS` |
+| Per guest session + IP | 5 jobs / hour | `RATE_LIMIT_PER_HOUR` |
+| Per IP (all sessions) | 12 jobs / hour | `RATE_LIMIT_PER_IP_PER_HOUR` |
+| Cooldown between jobs | 90 seconds | `RATE_LIMIT_MIN_INTERVAL_SECONDS` |
 | Global concurrent pipelines | 2 | `MAX_CONCURRENT_JOBS` |
 | Bot honeypot | Hidden `website` field on form | *(always on for HTMX)* |
 
@@ -127,4 +127,10 @@ If the VM had Postgres data to preserve:
 2. Import to Cloud SQL via Cloud SQL Auth Proxy or `gcloud sql import`.
 3. Or run `./scripts/migrate_fs_to_db.py` if results were filesystem-only.
 
-For a fresh demo, bootstrap creates an empty Cloud SQL database; Alembic runs on each Cloud Run deploy startup.
+For a fresh demo, bootstrap creates an empty Cloud SQL database; Alembic runs on each Cloud Run deploy startup (`scripts/migrate_with_retry.sh` retries until Cloud SQL is reachable).
+
+## YouTube downloads on Cloud Run
+
+PressPlay uses **yt-dlp** without browser cookies. YouTube often blocks **datacenter IPs** (including Cloud Run) with “confirm you're not a bot” / sign-in challenges. The app maps those failures to a clear job error in the UI; there is no cookie or account sign-in flow in v1.
+
+**Mitigations in-app:** alternate YouTube player clients (`android`, `web`), retries, and user-facing error text. **Workarounds:** try another public video, retry later, or run locally (`./run.sh`) where residential IP success rates are higher.
