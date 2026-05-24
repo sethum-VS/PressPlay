@@ -1,5 +1,15 @@
 # Project Specification: The Multimodal Newsroom
 
+## Revision history
+
+| Date | Summary |
+|------|---------|
+| **2026-05-24 (b)** | **Production MVP persistence:** Postgres 16 in `docker-compose` (Alembic `001_initial_schema`); `DbJobStore` / `DbResultsRepository` via `app/repositories/factory.py`; **guest sessions** (signed `pressplay_session` cookie, `SESSION_SECRET`, `GUEST_SESSION_TTL_DAYS`); per-guest ownership on jobs/press kits/homepage; DB rate limits; `/health/ready`; stale-job sweep on startup; `run.sh` DB bootstrap; pytest + CI; `scripts/smoke_mvp.sh`, `scripts/migrate_fs_to_db.py`. |
+| **2026-05-24 (a)** | Phase 0 stability (Watcher claims, audit artifacts, Graphify CLI fix, `ResultsRepository.save`); vertical brand packs (`sports` \| `events` \| `corp`); Phase 1 writing team (`StrategistAgent`, `EditorLinter`, pipeline stages `strategizing` / `editing`); product-direction roadmap from grill-me (implemented vs planned). |
+| *(prior)* | Hackathon MVP: Watcher → Writer → Graphify, citations, editorial workflow, v1 API. |
+
+---
+
 ## 1. Project Overview & Vision
 
 **Concept:** "The Multimodal Newsroom" is an automated, AI-driven content generation pipeline designed for rapid media deployment. It takes a video of an event (e.g., a SpaceX launch, a sports highlight, a keynote speech)—provided as a **YouTube URL**—and autonomously transforms it into a comprehensive multimedia press kit.
@@ -11,7 +21,9 @@
 - An engaging **3-part Twitter thread**
 - An interactive **knowledge graph** (entities and relationships), rendered with **D3.js** in the browser
 
-**Deployment:** Public URL on **GCP** (single VM + Docker). Demo narrative may describe a **CrewAI-style two-agent pipeline**; implementation uses a **thin Python orchestrator** (not the CrewAI library) unless explicitly added later.
+**Deployment:** Public URL on **GCP** (single VM + Docker). Demo narrative may describe a **CrewAI-style multi-agent newsroom** (Watcher → Strategist → Writer → Editor → Mapper); implementation uses a **thin Python orchestrator** (not the CrewAI library) unless loops justify a framework later (§18).
+
+**Product positioning (v1.1):** Sell PressPlay as a **press kit factory with governance** — not a generic “YouTube summarizer.” Differentiators vs ad-hoc ChatGPT/Gemini chat: fixed deliverables (blog + 3 tweets + graph), separated fact layer (Watcher) and copy layer (Writer), **timestamped citations**, shareable `/newsroom/{id}` with **editorial workflow** (`draft` → `published`), JSON API + webhooks + exports, and Vertex on the customer’s GCP project. See `docs/PILOT_SPORTS.md` for a reference vertical pilot.
 
 ---
 
@@ -20,20 +32,25 @@
 | Area | Decision |
 |------|----------|
 | **Source of truth** | **This spec** over any standalone HTML mock behavior. Static HTML/Stitch mocks are **visual design references only** — ported into Jinja/Tailwind, not alternate API or pipeline behavior. |
-| Job execution | **Async in-memory jobs** + HTMX polling (`POST /api/jobs`, `GET /api/jobs/{id}` every ~2s) — not one blocking POST |
+| Job execution | **Async background jobs** + HTMX polling (`POST /api/jobs`, `GET /api/jobs/{id}` every ~2s). **`DATABASE_URL` set** → `DbJobStore` (Postgres, survives restart). **Unset** → in-memory `JobStore` (dev only) |
 | Video input | **YouTube URL only** (v1) — no MP4 upload UI |
-| Results | Shareable **`/newsroom/{id}`**; homepage lists past runs from `data/results/` |
+| Results | Shareable **`/newsroom/{id}`**; homepage lists **this guest’s** recent press kits (`list_recent(guest_session_id)`). **`DATABASE_URL` set** → Postgres `press_kits`; **unset** → global `data/results/` (dev only) |
 | Processing modes | **Quick** (default) vs **Full** — see §4 |
 | LLM (Watcher/Writer) | **Gemini 2.5 Flash** via **`google-genai`** SDK with **`vertexai=True`** (Vertex backend). **Not** the legacy `google-cloud-aiplatform`–only call path. |
-| LLM output | **Pydantic structured output** for Writer (`WriterOutput`); Watcher uses `generate_text` |
+| LLM output | **Pydantic structured output** for Watcher (`WatcherOutput`: summary + claims) and Writer (`WriterOutput`: blog + tweets + optional `claim_refs`) |
+| Citations | **Claim** objects with `start_sec` / `end_sec`, `source` (`transcript` \| `visual`); persisted as `claims.json` (FS) or `press_kits.claims` JSONB (Postgres); newsroom “jump to moment” links |
+| Editorial | **WorkflowStatus** on manifest; save blog/tweets; partial regen (`tweets` \| `blog` \| `graph`) without re-ingest |
+| JSON API | **`/api/v1/jobs`** + export + optional **`webhook_url`** (best-effort POST on done/failed) |
+| Brand voice | **Vertical brand packs** — `config/brand-{sports\|events\|corp}.yaml`; job field **`vertical`** (default `events`); Writer `brand_prompt_suffix(vertical)`. Legacy fallback: `brand.yaml` / `config/brand.yaml` when pack missing |
+| Persistence | **`DATABASE_URL` set** (production path) → Postgres `guest_sessions`, `jobs`, `press_kits`, `rate_limit_events` via SQLAlchemy 2 async + Alembic. **Unset** → in-memory jobs + `data/results/` filesystem (local UI-only; see README) |
 | GCP auth | **Pattern C** — ADC locally (`gcloud auth application-default login`, **no** `GOOGLE_APPLICATION_CREDENTIALS`); service account JSON in Docker at `secrets/gcp-sa.json` → `/secrets/gcp.json` |
 | Video context | **Real yt-dlp + ffmpeg** download/trim; **Memvid CLI/SDK** (`memvid put`, Whisper + visual search) → `unified_context` |
-| Agent orchestration | **Thin `PipelineRunner`** — `WatcherAgent` → `WriterAgent`; pitch as CrewAI-style, no CrewAI library |
+| Agent orchestration | **Thin `PipelineRunner`** — `WatcherAgent` → `StrategistAgent` → `WriterAgent` → `EditorLinter` (rule-based, non-blocking) → `GraphifyService`; pitch as CrewAI-style, no CrewAI library |
 | Mapper | **`GraphifyService`** — subprocess `graphify extract` when LLM keys available; **heuristic** graph fallback otherwise |
 | Graph UI | **D3.js** (`app/static/js/graph.js`) — `graph.json` embedded in `newsroom.html` |
 | Mock modes | See §10.1 — `MOCK_LLM` / missing GCP vs `PRESSPLAY_USE_MOCK=1` |
-| Auth (v1) | **None by default**; optional **`PRESSPLAY_DEMO_SECRET`** |
-| Rate limits | **~5 jobs / hour / IP**; **max 2 concurrent** jobs (**locked** for v1; see §17) |
+| Auth (v1) | **Guest sessions** (no signup): signed HTTP-only cookie `pressplay_session`; optional **`X-PressPlay-Session`** header for API clients; `session_token` on `POST /api/v1/jobs` response. Optional site gate: **`PRESSPLAY_DEMO_SECRET`** (orthogonal to guest ownership) |
+| Rate limits | **~5 jobs / hour** per `(guest_session_id, client_ip)` in Postgres when `DATABASE_URL` set; else in-memory per IP. **Max 2 concurrent** jobs (**locked** for v1; see §17) |
 | Full mode cap | **1 hour** max source video length |
 
 ---
@@ -47,10 +64,13 @@
 | Video download | **yt-dlp** | YouTube-only URL validation; trim for Quick mode |
 | Vision / context | **Memvid Python SDK** (local) | Whisper transcript + frame/visual context → unified text payload |
 | LLM | **`google-genai`** → **Vertex** (`genai.Client(vertexai=True, ...)`) | `app/adapters/gemini.py`; model default `gemini-2.5-flash` |
-| Orchestration | **Thin Python pipeline** | `app/services/pipeline.py`: Watcher → Writer → Graphify |
+| Orchestration | **Thin Python pipeline** | `app/services/pipeline.py`: Watcher → Strategist → Writer → Editor (lint) → Graphify; webhooks on completion |
+| Persistence (MVP deploy) | **Postgres 16** + **Alembic** | Optional `DATABASE_URL`; guest session cookies; `DbJobStore` / `DbResultsRepository` |
+| Config / export | **PyYAML**, **httpx** | Brand config; webhook delivery; export helpers |
 | Knowledge graph | **`graphifyy` pip package**, CLI binary **`graphify`** (also checks `graphifyy`) | `graphify extract <dir> --backend gemini --no-cluster --out <dir>`; reads `graphify-out/graph.json` |
 | Graph visualization | **D3.js** | Force-directed graph from normalized JSON |
-| Hosting | **GCP Compute Engine (or similar) + Docker** | Public HTTPS; `data/` volume for results and temp files |
+| Hosting | **GCP Compute Engine (or similar) + Docker Compose** | Postgres 16 + API; `data/` volume for temp video and optional FS audit files |
+| Session / DB | **SQLAlchemy 2 async**, **asyncpg**, **Alembic**, **itsdangerous** | `app/db/`, `app/middleware/guest_session.py`, `app/repositories/` |
 
 **Explicitly not in v1:** CrewAI library, MP4 file upload, Pyvis server-rendered graphs, serverless-only hosting without a worker VM.
 
@@ -82,20 +102,30 @@
 
 ```mermaid
 flowchart TB
-  subgraph client [Browser HTMX]
-    UI[index.html]
+  subgraph client [Browser and API clients]
+    UI[index.html HTMX]
+    Cookie[pressplay_session cookie]
+    V1["POST /api/v1/jobs"]
     Poll["GET /api/jobs/{id}"]
     Result["GET /newsroom/{id}"]
+    Edit[Editorial save regen workflow]
   end
 
   subgraph api [FastAPI on GCP Docker]
+    MW[GuestSessionMiddleware]
     POST["POST /api/jobs"]
-    JobStore[(JobStore in-memory)]
-    Disk[(data/jobs + data/results)]
+    JobRepo[(DbJobStore Postgres)]
+    KitRepo[(DbResultsRepository)]
+    TempDisk[(data/temp video)]
     YT[YouTubeService]
     MV[MemvidService]
-    ORCH[Orchestrator: watcher → writer]
+    ORCH[Watcher Strategist Writer Editor]
     GF[GraphifyService]
+    WH[webhooks.py]
+  end
+
+  subgraph data [docker-compose]
+    PG[(Postgres 16)]
   end
 
   subgraph gcp [GCP Vertex]
@@ -103,16 +133,23 @@ flowchart TB
     ADC[ADC or SA JSON Pattern C]
   end
 
-  UI --> POST
-  POST --> JobStore
+  Cookie --> MW
+  UI --> MW
+  V1 --> MW
+  MW --> POST
+  POST --> JobRepo
   POST --> YT --> MV --> ORCH --> GF
   ORCH --> Gemini
   ADC --> Gemini
   GF -->|optional GEMINI_API_KEY| GraphifyCLI[graphify extract]
-  Poll --> JobStore
-  ORCH --> Disk
-  GF --> Disk
-  Result --> Disk
+  Poll --> JobRepo
+  ORCH --> KitRepo
+  ORCH --> TempDisk
+  ORCH --> WH
+  Result --> KitRepo
+  Edit --> KitRepo
+  JobRepo --> PG
+  KitRepo --> PG
 ```
 
 ### 5.1 Pipeline steps
@@ -120,17 +157,24 @@ flowchart TB
 1. **Ingestion:** User submits YouTube URL + mode on index. HTMX `POST /api/jobs` creates job; progress partial polls until `done`.
 2. **Download:** `YouTubeService` validates YouTube URL, downloads via **yt-dlp**, trims with **ffmpeg** (Quick window or Full up to 1h). Skipped when `PRESSPLAY_USE_MOCK=1`.
 3. **Context extraction:** `MemvidService` runs **`memvid put`** on local file → **unified_context** (Whisper transcript + visual search snippets). Temp video deleted after ingest. Full mock uses `extract_context_stub`.
-4. **Watcher:** `WatcherAgent` → `GeminiAdapter.generate_text` on Vertex (or canned mock).
-5. **Writer:** `WriterAgent` → `GeminiAdapter.generate_structured(..., WriterOutput)` (or mock JSON).
-6. **Mapper:** `GraphifyService.build_graph` — `graphify extract` + normalize, or heuristic fallback → D3 `graph.json`.
-7. **Persistence:** `ResultsRepository.save` → `data/results/{id}/`; `result_url` `/newsroom/{id}`.
+4. **Watcher:** `WatcherAgent` → `generate_structured(..., WatcherOutput)` — summary + timestamped **claims**; claim normalization (`_normalize_claims`); **retry** once if claims empty but summary non-empty; warning logs.
+5. **Strategist:** `StrategistAgent` → `StrategistOutput` — editorial brief (angle, audience, thread hook, omit topics) from summary + claims; optional vertical hint in prompt (API accepts `vertical`; pipeline may omit — see §7.2).
+6. **Writer:** `WriterAgent` → `WriterOutput` — blog + 3 tweets; claims + **strategist brief** in prompt; **`brand_prompt_suffix(vertical)`** from vertical pack; optional `claim_refs`.
+7. **Editor:** `EditorLinter.lint` — rule-based checks (banned phrases, tweet length/count, reading level); **non-blocking** (`EditorReport` persisted; pipeline continues).
+8. **Mapper:** `GraphifyService.build_graph_with_source` — `graphify` \| `heuristic`; `_build_graph_sync` runs CLI in thread (fixed method nesting — CLI path works).
+9. **Persistence:** `get_results_repo().save(..., guest_session_id=...)` → Postgres `press_kits` row when `DATABASE_URL` set (blog, tweets, graph, claims, audit columns, `vertical`, mock flags); optional mirror under `data/results/{id}/` when using filesystem fallback. `workflow_status=draft`; `result_url` `/newsroom/{id}`.
+10. **Webhook:** If `webhook_url` set on job, `app/services/webhooks.py` POSTs JSON payload on **done** or **failed** (async, best-effort).
+
+**Startup (Postgres):** `lifespan` runs `init_db()`, **stale job sweep** (in-flight jobs → `failed` with “Interrupted by server restart”), then serves traffic.
 
 ### 5.2 Job state machine
 
 ```text
-queued → downloading → memvid → watching → writing → mapping → done
-                                                              ↘ failed
+queued → downloading → memvid → watching → strategizing → writing → editing → mapping → done
+                                                                                        ↘ failed
 ```
+
+Progress percentages: `STAGE_PROGRESS` in `app/domain/models.py` (e.g. strategizing 55%, editing 75%).
 
 Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 
@@ -141,6 +185,7 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
   "stage": "writing",
   "progress_pct": 65,
   "mode": "quick",
+  "vertical": "events",
   "youtube_url": "https://...",
   "error": null,
   "result_url": "/newsroom/uuid"
@@ -153,14 +198,32 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 |-----------|--------|--------|
 | FastAPI + Jinja + HTMX + Tailwind CDN | **Shipped** | `app/main.py`, templates under `app/templates/` |
 | `POST /api/jobs` + poll + `/newsroom/{id}` | **Shipped** | Matches locked API surface |
+| `POST /api/v1/jobs` + `GET /api/v1/jobs/{id}` | **Shipped** | JSON API; optional `webhook_url` |
+| `GET /api/v1/newsroom/{id}/export` | **Shipped** | `format=markdown\|json\|slack` |
+| Editorial: save, workflow, partial regen | **Shipped** | `/newsroom/{id}/save`, `/api/jobs/{id}/regenerate` |
+| Watcher claims + `claims.json` | **Shipped** | Citations on newsroom with jump links |
 | `GET /health` | **Shipped** | Liveness for Docker/VM |
 | YouTubeService (yt-dlp, Quick trim) | **Shipped** | Real unless `PRESSPLAY_USE_MOCK=1` |
 | MemvidService (CLI ingest) | **Shipped** | Requires local `memvid` + Whisper models; see blockers §17 |
-| WatcherAgent / WriterAgent | **Shipped** | Vertex when GCP configured; canned SpaceX stub when `should_mock_llm()` |
-| GraphifyService | **Shipped** | CLI when keys + binary present; heuristic/stub fallback |
+| WatcherAgent / WriterAgent | **Shipped** | Structured `WatcherOutput` + `WriterOutput`; Vertex when GCP set; mock JSON with sample claims when `should_mock_llm()` |
+| Watcher claim hygiene | **Shipped** | `_normalize_claims`, empty-claims retry, completion logging |
+| StrategistAgent | **Shipped** | `StrategistOutput`; `strategist_brief.json` / DB column |
+| EditorLinter | **Shipped** | Rule-based; `editor_report.json` / DB column; does not fail jobs |
+| Vertical brand packs | **Shipped** | `config/brand-sports.yaml`, `brand-events.yaml`, `brand-corp.yaml`; `BrandVertical` enum; HTMX + v1 `vertical` |
+| Audit artifacts | **Shipped** | `claims.json`, `unified_context.txt` under `data/results/{id}/` (and DB when configured) |
+| GraphifyService | **Shipped** | CLI when keys + binary present; `_build_graph_sync` correctly scoped on class; heuristic/stub fallback |
+| Postgres + guest sessions | **Shipped** | `DATABASE_URL`, Alembic `001_initial_schema`, `guest_sessions` / `jobs` / `press_kits` / `rate_limit_events`; `GuestSessionMiddleware`; ownership 404 across guests |
+| `GET /health/ready` | **Shipped** | Postgres `SELECT 1`; compose healthcheck on `newsroom` |
+| DB rate limiter | **Shipped** | `app/services/rate_limit_db.py`; `check_rate_limit()` in `app/api/deps.py` |
+| Stale job sweep | **Shipped** | `app/db/startup.py` on app lifespan |
+| pytest + CI | **Shipped** | `tests/` (guest cookie, ownership, health); `.github/workflows/ci.yml` |
+| `scripts/smoke_mvp.sh` | **Shipped** | End-to-end health → guest → mock job → newsroom |
+| Partial regen + Strategist/Editor | **Gap** | `regen.py` re-runs Writer/Graphify only — no Strategist or Editor on regen |
+| Editor + vertical packs | **Gap** | `EditorLinter` uses default `brand_banned_phrases()` — not job `vertical` yet |
+| Filesystem `manifest.vertical` | **Gap** | `ResultsRepository.save` accepts `vertical` but does not write it to `manifest.json` (DB path persists) |
 | D3 newsroom graph | **Shipped** | `app/static/js/graph.js` |
-| JobStore + rate limit + concurrent cap (2) | **Shipped** | `app/api/deps.py` |
-| ResultsRepository + past runs on `/` | **Shipped** | `manifest.json` includes pipeline/LLM mock flags |
+| JobStore + rate limit + concurrent cap (2) | **Shipped** | `DbJobStore` or legacy `JobStore`; `check_concurrent_cap()` async |
+| ResultsRepository + past runs on `/` | **Shipped** | Guest-scoped `list_recent`; Postgres or FS; manifest fields include mock flags, `workflow_status`, `vertical`, audit JSON |
 | GCP production deploy | **Not done** | Docker image + compose ready; VM deploy TBD |
 | `run.sh` local launcher | **Shipped** | Requires `GCP_PROJECT_ID` for live Vertex path; see §12.1 |
 
@@ -171,14 +234,18 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 | Pattern | Where | Purpose |
 |---------|--------|---------|
 | **Layered / hexagonal** | `api/` → `services/` → `adapters/` | Isolate Memvid, Graphify, Gemini from routes |
-| **Job + state machine** | `JobStore` + status enum | HTMX polling and staged UI |
-| **Pipeline** | `PipelineRunner` | Ordered steps with shared job context |
+| **Job + state machine** | `get_job_store()` (`DbJobStore` \| legacy) + `JobStatus` enum | HTMX polling and staged UI; `guest_session_id` on create |
+| **Pipeline** | `PipelineRunner` | Ordered steps; `await results_repo.save(..., guest_session_id)` |
+| **Guest session** | `GuestSessionMiddleware` + `app/auth/guest.py` | Signed cookie; `request.state.guest` |
+| **Repository factory** | `app/repositories/factory.py` | `DATABASE_URL` → DB repos; else FS + in-memory adapters |
 | **Adapter** | `GeminiAdapter` (`app/adapters/gemini.py`); Memvid/Graphify as services | Swappable external tools |
 | **Mock policy** | `app/services/mock_mode.py` | Central `should_mock_llm()`, `pipeline_skips_ingest()`, Graphify heuristic |
 | **DTO / Pydantic** | `PressKitResult`, `WriterOutput`, etc. | Strict JSON contracts |
-| **Repository (light)** | `ResultsRepository` | Filesystem persistence for `/newsroom/{id}` |
+| **Repository** | `DbResultsRepository` \| `AsyncFsResultsRepository` | Press kits + manifest fields; guest-scoped reads |
 | **Strategy** | `ProcessingMode.QUICK` \| `FULL` | Different download trim and timeouts |
-| **Facade** | `NewsroomService` | Single entry from API routes |
+| **Shared job creation** | `app/api/job_creation.py` | HTMX + v1 JSON share validation, rate limit, `schedule_pipeline` |
+| **Partial regen** | `app/services/regen.py` | Re-run Writer or Graphify from disk; **skips Strategist/Editor** (known gap) |
+| **Export** | `app/services/export.py` | Markdown, JSON, Slack Block Kit text for integrations |
 
 **The Mapper** is implemented as **`GraphifyService`** (subprocess or Python API), not a third LLM-based CrewAI agent. It remains **“Agent 3 (The Mapper)”** in product language.
 
@@ -186,31 +253,96 @@ Expose via `GET /api/jobs/{id}` for HTMX polling (e.g. every 2s):
 
 ## 7. Agent Specifications
 
+Pipeline order: **Watcher → Strategist → Writer → Editor (lint) → Mapper (Graphify service)**.
+
 ### 7.1 The Watcher (implementation: `app/services/agents/watcher.py`)
 
 - **Role:** Video Context Analyst
-- **Input:** Memvid `unified_context` string
-- **Goal:** Chronological, factual summary of the event
-- **Persona (prompt):** Meticulous investigative journalist
-- **Implementation:** `GeminiAdapter.generate_text` (Vertex `google-genai` or mock stub)
+- **Input:** Memvid `unified_context` string (transcript lines include `[seconds]` or `[mm:ss]` when Memvid provides timestamps — see `MemvidService._format_timeline`)
+- **Goal:** Chronological factual summary **plus** atomic, timestamped claims
+- **Persona (prompt):** Meticulous investigative journalist — observable facts only; no speculation
+- **Implementation:** `GeminiAdapter.generate_structured(..., WatcherOutput)` (Vertex or mock stub)
+- **Output contract (Pydantic):**
 
-### 7.2 The Writer (implementation: `app/services/agents/writer.py`)
+```json
+{
+  "summary": "Chronological paragraphs...",
+  "claims": [
+    {
+      "text": "Falcon 9 lifts off from the pad.",
+      "start_sec": 42.0,
+      "end_sec": 55.0,
+      "source": "visual",
+      "youtube_url": "https://www.youtube.com/watch?v=..."
+    }
+  ]
+}
+```
+
+`youtube_url` on each claim is set server-side from the job URL when missing from the model.
+
+**Stability (Phase 0):** After structured generation, claims pass through `_normalize_claims` (drop empty rows; coerce `source` for Vertex JSON quirks). If the summary is non-empty but claims are empty, the agent **retries once** with `WATCHER_RETRY_SUFFIX`. Pipeline logs claim count or warns when zero claims are persisted.
+
+### 7.2 The Strategist (implementation: `app/services/agents/strategist.py`)
+
+- **Role:** Editorial strategist between facts and copy
+- **Input:** Watcher `summary` + optional claims list (up to 30 lines in prompt)
+- **Goal:** Single narrative frame for the Writer — not new facts
+- **Implementation:** `GeminiAdapter.generate_structured(..., StrategistOutput)` (Vertex or mock)
+- **Output contract (Pydantic):**
+
+```json
+{
+  "angle": "One-sentence narrative lens",
+  "target_audience": "Who this press kit is for",
+  "thread_hook": "Opening theme for the 3-part thread",
+  "omit_topics": ["speculation", "off-topic tangents"]
+}
+```
+
+Persisted as **`strategist_brief.json`** (filesystem) or `strategist_brief` JSON column (Postgres).
+
+### 7.3 The Writer (implementation: `app/services/agents/writer.py`)
 
 - **Role:** Lead Copywriter & Social Media Manager
-- **Input:** Watcher summary
-- **Goal:** Markdown blog post + cohesive 3-part Twitter thread
-- **Persona (prompt):** Expert digital marketer and storyteller
-- **Implementation:** `GeminiAdapter.generate_structured` with Pydantic `WriterOutput` (`response_schema` / JSON mode on Vertex)
+- **Input:** Watcher `summary` + numbered **claims** + optional **Strategist** brief (`angle`, `target_audience`, `thread_hook`, `omit_topics`)
+- **Goal:** Markdown blog post + cohesive 3-part Twitter thread; facts must align with summary/claims
+- **Persona (prompt):** Expert digital marketer; plus **vertical brand pack** via `brand_prompt_suffix(vertical)` (`app/services/brand.py` → `config/brand-{vertical}.yaml`)
+- **Implementation:** `GeminiAdapter.generate_structured` with Pydantic `WriterOutput`
 - **Output contract (Pydantic):**
 
 ```json
 {
   "blog_post": "# Title\n\n...",
-  "tweets": ["tweet 1", "tweet 2", "tweet 3"]
+  "tweets": ["tweet 1", "tweet 2", "tweet 3"],
+  "claim_refs": [0, 2]
 }
 ```
 
-### 7.3 The Mapper (implementation: `app/services/graphify.py`)
+`claim_refs` is optional — 0-based indices into the Watcher claims list for key blog statements.
+
+**Vertical packs:** `BrandVertical` = `sports` \| `events` \| `corp` (default **`events`**). Each pack supplies `tone`, `voice`, `banned_phrases`, `hashtag_policy`, `max_tweet_chars`.
+
+### 7.4 The Editor (implementation: `app/services/agents/editor.py`)
+
+- **Role:** Post-Writer **linter** (deterministic rules, not an LLM)
+- **Input:** `WriterOutput` (blog + tweets)
+- **Checks:** Banned phrases (from brand config), per-tweet length vs `max_tweet_chars`, tweet count = 3, blog reading level (avg/max words per sentence)
+- **Behavior:** **Non-blocking** — violations recorded; pipeline always proceeds to mapping
+- **Output contract (Pydantic):**
+
+```json
+{
+  "passed": false,
+  "violations": [
+    { "rule": "banned_phrase", "message": "...", "location": "blog" }
+  ]
+}
+```
+
+Persisted as **`editor_report.json`** (filesystem) or `editor_report` JSON column (Postgres). Newsroom UI may surface this in a later pass.
+
+### 7.5 The Mapper (implementation: `app/services/graphify.py`)
 
 - **Role:** Knowledge Graph Architect (service, not LLM agent)
 - **Input:** Final `blog_post` markdown (written to temp dir as `blog.md`)
@@ -239,13 +371,43 @@ Graphify’s native `graph.json` is adapted to this shape in a small Python mapp
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/` | Form + list of recent press kits from `data/results/` |
+| `GET` | `/` | Form + **guest-scoped** list of recent press kits |
 | `POST` | `/api/jobs` | Create job (HTMX); returns progress partial |
 | `GET` | `/api/jobs/{id}` | Poll status / stage (HTMX `every 2s`) |
-| `GET` | `/newsroom/{id}` | Shareable results: blog, tweets, D3 graph |
+| `GET` | `/newsroom/{id}` | Shareable results: blog, tweets, D3 graph, citations, editorial UI |
 | `GET` | `/health` | Liveness `{"status":"ok"}` |
+| `GET` | `/health/ready` | Readiness — Postgres `SELECT 1` when `DATABASE_URL` set; 503 if DB down |
+| `POST` | `/api/v1/jobs` | JSON create job; optional `webhook_url` |
+| `GET` | `/api/v1/jobs/{id}` | JSON poll status |
+| `GET` | `/api/v1/newsroom/{id}/export` | `format=json\|markdown\|slack` |
+| `POST` | `/newsroom/{id}/save` | Save edited blog/tweets |
+| `POST` | `/newsroom/{id}/workflow` | `draft` → `in_review` → `approved` → `published` |
+| `POST` | `/api/jobs/{id}/regenerate` | Partial regen: `tweets`, `blog`, or `graph` |
 
-**POST form fields:** `youtube_url`, `mode` (`quick` \| `full`), optional `quick_minutes` (5–20), optional `secret` (required when `PRESSPLAY_DEMO_SECRET` is set).
+**HTMX `POST /api/jobs` form fields:** `youtube_url`, `mode` (`quick` \| `full`), **`vertical`** (`sports` \| `events` \| `corp`, default `events`), optional `quick_minutes` (5–20), optional `secret` (required when `PRESSPLAY_DEMO_SECRET` is set).
+
+**JSON `POST /api/v1/jobs` body:**
+
+```json
+{
+  "youtube_url": "https://www.youtube.com/watch?v=...",
+  "mode": "quick",
+  "quick_minutes": 10,
+  "vertical": "events",
+  "webhook_url": "https://example.com/hooks/pressplay",
+  "secret": "optional-demo-secret"
+}
+```
+
+Validation: `parse_brand_vertical()` in `app/api/job_creation.py` — invalid values return 400 with message `vertical must be 'sports', 'events', or 'corp'.`
+
+**Response:** `{ "id", "status", "poll_url", "session_token" }` — `session_token` is the signed guest cookie value for programmatic clients (also set via `Set-Cookie` on first request). Header `X-PressPlay-Secret` accepted when demo secret is enabled. Header **`X-PressPlay-Session`** carries the same signed token as the cookie for non-browser clients.
+
+**Access control:** Poll, newsroom, export, editorial, and regen require the job/press kit to belong to the current guest (404 if not — no cross-guest leakage).
+
+**`POST /api/jobs/{id}/regenerate` form field:** `part` = `tweets` \| `blog` \| `graph` (no re-ingest; uses `summary.txt`, `claims.json`, and on-disk blog). **Known gap:** does **not** re-run Strategist or Editor; Writer regen uses summary + claims + **`vertical` from manifest** when present (Postgres / persisted manifest).
+
+**Webhook payload (on done/failed):** `{ "id", "status", "result_url", "youtube_url" }`.
 
 ---
 
@@ -253,55 +415,100 @@ Graphify’s native `graph.json` is adapted to this shape in a small Python mapp
 
 ```text
 pressplay/
-├── run.sh                        # local deps + ADC/SA checks; optional --verify-llm
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
+├── run.sh                        # deps, Memvid/Whisper checks, ADC/SA, --verify-llm
+├── Dockerfile                    # ffmpeg, memvid-sdk, best-effort whisper-small
+├── docker-compose.yml            # Postgres 16 + newsroom; Alembic on start
+├── alembic.ini
+├── pytest.ini
+├── requirements.txt              # sqlalchemy, asyncpg, alembic, itsdangerous, pytest
 ├── .env.example
 ├── README.md
+├── config/
+│   ├── brand-sports.yaml         # vertical pack (sports post-game)
+│   ├── brand-events.yaml         # default vertical pack
+│   ├── brand-corp.yaml           # internal corporate comms
+│   └── brand.yaml.example        # legacy single-file override
+├── alembic/                      # Postgres migrations (when DATABASE_URL set)
+├── docs/
+│   └── PILOT_SPORTS.md           # sports post-game pilot metrics vs ChatGPT
 ├── app/
 │   ├── main.py
-│   ├── config.py                 # Settings, Pattern C credential mode
+│   ├── config.py
 │   ├── api/
 │   │   ├── routes_pages.py
-│   │   ├── routes_jobs.py
-│   │   └── deps.py               # rate limit, concurrent cap, demo secret
+│   │   ├── routes_jobs.py        # HTMX jobs
+│   │   ├── routes_v1.py          # JSON API + export
+│   │   ├── routes_editorial.py   # save, workflow, regen
+│   │   ├── job_creation.py       # shared create_pressplay_job(guest_session_id)
+│   │   ├── deps.py               # rate limit, concurrent cap, demo secret
+│   │   └── deps_guest.py         # get_current_guest, get_guest_id
+│   ├── middleware/
+│   │   └── guest_session.py      # cookie + X-PressPlay-Session
+│   ├── auth/
+│   │   └── guest.py              # sign/unsign guest_id
 │   ├── domain/
-│   │   ├── models.py
+│   │   ├── models.py             # Claim, WatcherOutput, WorkflowStatus, …
 │   │   └── errors.py
 │   ├── adapters/
-│   │   └── gemini.py             # google-genai Vertex + mock stubs
+│   │   └── gemini.py
 │   ├── services/
-│   │   ├── mock_mode.py          # ingest skip vs LLM mock vs Graphify heuristic
-│   │   ├── job_store.py
+│   │   ├── mock_mode.py
+│   │   ├── job_store.py          # optional webhook_url on JobRecord
 │   │   ├── pipeline.py
+│   │   ├── regen.py              # partial regen
+│   │   ├── webhooks.py
+│   │   ├── export.py
+│   │   ├── brand.py
 │   │   ├── youtube.py
 │   │   ├── memvid.py
 │   │   ├── graphify.py
-│   │   ├── results_repo.py
+│   │   ├── results_repo.py       # filesystem persistence (legacy dev)
+│   │   ├── guest_sessions.py     # guest_sessions CRUD
+│   │   ├── rate_limit_db.py      # Postgres sliding-window rate limit
 │   │   └── agents/
 │   │       ├── watcher.py
-│   │       └── writer.py
+│   │       ├── strategist.py
+│   │       ├── writer.py
+│   │       └── editor.py
+│   ├── repositories/
+│   │   ├── factory.py            # Db* vs filesystem from DATABASE_URL
+│   │   ├── db_job_store.py
+│   │   ├── db_results_repo.py
+│   │   └── fs_adapter.py
+│   ├── db/
+│   │   ├── models.py             # guest_sessions, jobs, press_kits, rate_limit_events
+│   │   ├── session.py            # async engine + session factory
+│   │   └── startup.py            # stale job sweep
 │   ├── static/js/graph.js
-│   └── templates/                # Jinja; visual tokens from HTML mock design
+│   └── templates/
 │       ├── base.html
 │       ├── index.html
-│       ├── newsroom.html
+│       ├── newsroom.html         # citations, editorial, export links
+│       ├── error.html
 │       └── partials/
-│           ├── job_progress.html
-│           └── job_error.html
-├── data/                         # Docker volume
+├── data/
 │   ├── jobs/
 │   └── results/{id}/
-│       ├── manifest.json         # includes pipeline_mock, llm_mock labels
+│       ├── manifest.json         # workflow_status, vertical, ingest_duration_sec, graph_source, …
 │       ├── blog.md
 │       ├── tweets.json
 │       ├── graph.json
+│       ├── claims.json           # audit / citations
+│       ├── unified_context.txt   # Memvid payload (audit)
+│       ├── strategist_brief.json
+│       ├── editor_report.json
 │       └── summary.txt
 ├── secrets/                      # gitignored — gcp-sa.json for Docker
+├── tests/                        # pytest + postgres (CI)
+│   ├── conftest.py
+│   ├── test_health.py
+│   ├── test_guest_session.py
+│   └── test_ownership.py
 └── scripts/
-    ├── verify_gcp.py             # Vertex smoke via GeminiAdapter
-    └── cleanup_ttl.py            # optional cron TTL for data/results/
+    ├── verify_gcp.py
+    ├── cleanup_ttl.py
+    ├── smoke_mvp.sh              # health → guest → job → newsroom
+    └── migrate_fs_to_db.py       # optional FS → Postgres import
 ```
 
 ---
@@ -325,6 +532,9 @@ pressplay/
 | `PRESSPLAY_DEMO_SECRET` | *(unset)* | Optional shared-secret gate |
 | `GRAPHIFY_BIN` | *(auto)* | Override path to `graphify` binary |
 | `GEMINI_API_KEY` | *(optional)* | For Graphify CLI `--backend gemini`; not required for Vertex Watcher/Writer |
+| `DATABASE_URL` | *(unset = FS dev)* | `postgresql+asyncpg://...` → Postgres jobs, press kits, guest sessions |
+| `SESSION_SECRET` | *(required in compose)* | Cookie signing for guest sessions |
+| `GUEST_SESSION_TTL_DAYS` | `30` | Guest session lifetime |
 
 **Optional auth:** If `PRESSPLAY_DEMO_SECRET` is set, require matching form field `secret` or `X-PressPlay-Secret` header. If unset, no auth.
 
@@ -348,7 +558,7 @@ Central logic: `app/services/mock_mode.py`.
 
 | Tool | Purpose |
 |------|---------|
-| **`./run.sh`** | Creates/uses `.venv`, installs `requirements.txt`, checks `ffmpeg`, `yt-dlp`, warns on missing `memvid`/`graphify`, loads `.env`, validates **Pattern C** ADC or SA file, optional `--verify-llm`, starts `uvicorn --reload`. **Requires `GCP_PROJECT_ID`** for startup (live Vertex workflow). |
+| **`./run.sh`** | Creates/uses `.venv`, installs `requirements.txt`, checks `ffmpeg`, `yt-dlp`, **memvid-sdk** / `memvid` CLI and **Whisper model** (warns if missing), `graphify`, loads `.env`, **`docker compose up -d db`** + **`alembic upgrade head`** when `DATABASE_URL` set, validates **Pattern C** ADC or SA, warns if `PRESSPLAY_USE_MOCK=1` or unset `SESSION_SECRET`, optional `--verify-llm`, starts `uvicorn --reload`. **Requires `GCP_PROJECT_ID`** for live Vertex startup. |
 | **`./run.sh --skip-server`** | Checks only |
 | **`scripts/verify_gcp.py`** | One-shot Vertex `generate_text` smoke test |
 | **`scripts/cleanup_ttl.py`** | Delete `data/results/*` older than `RESULTS_TTL_HOURS` |
@@ -361,8 +571,10 @@ See `README.md` for command examples.
 ## 11. Guardrails & Error Handling
 
 - **YouTube only** — reject non-YouTube URLs; handle private/unavailable/live-not-ready with clear HTMX error partials.
-- **Concurrent cap** — max 2 active pipelines.
-- **Rate limit** — ~5 job creations per hour per IP.
+- **Concurrent cap** — max 2 active pipelines (`DbJobStore.active_count_async` when Postgres enabled).
+- **Rate limit** — ~5 job creations per hour per `(guest_session_id, client_ip)` (Postgres) or per IP (legacy).
+- **Guest ownership** — cross-guest access to jobs/newsrooms returns **404** (not 403).
+- **Stale jobs** — in-flight jobs marked `failed` on server restart when using Postgres.
 - **Quick mode** — server-side enforce 5–20 minute processing window.
 - **Full mode** — max 1 hour of source video; staged progress, no 60s claim.
 - **Playlists** — not supported in v1 unless explicitly added later.
@@ -376,7 +588,7 @@ See `README.md` for command examples.
 |-----------|----------------|
 | VM | e.g. **e2-standard-4** (4 vCPU, 16GB RAM) for Memvid/Whisper |
 | Disk | 50–100GB boot + volume mount for `data/` |
-| Image | `Dockerfile`: Python 3.11-slim, `ffmpeg`, pip deps from `requirements.txt` (`google-genai`, `graphifyy`, `memvid-sdk`, …) |
+| Image | `Dockerfile`: Python 3.11-slim, `ffmpeg`, `curl`, pip deps; `memvid-sdk` + best-effort `memvid models install whisper-small` at build |
 | Secrets | `secrets/gcp-sa.json` → mount `/secrets/gcp.json`; `GOOGLE_APPLICATION_CREDENTIALS=/secrets/gcp.json` |
 | HTTPS | Reverse proxy (Caddy/nginx) or GCP load balancer → container `:8000` |
 | Egress | Outbound HTTPS for YouTube, Vertex |
@@ -390,24 +602,34 @@ See `README.md` for command examples.
 
 `GeminiAdapter` uses `google.genai.Client(vertexai=True, project=..., location=...)`. Startup logs `Gemini auth mode: adc | service_account | mock`.
 
-**Implemented `docker-compose.yml`:**
+**Implemented `docker-compose.yml`:** **Postgres 16** service + API with `DATABASE_URL`, `SESSION_SECRET`, Alembic on start, guest session middleware, plus GCP SA mount and `data/` volume for artifacts/backward compatibility.
 
 ```yaml
 services:
+  db:
+    image: postgres:16-alpine
+    ports: ["5432:5432"]           # local dev; omit public bind on GCP VM
+    volumes: [pressplay_pg:/var/lib/postgresql/data]
+    healthcheck: pg_isready
   newsroom:
     build: .
+    depends_on:
+      db: { condition: service_healthy }
     ports: ["8000:8000"]
+    command: sh -c "alembic upgrade head && uvicorn ..."
     volumes:
       - ./data:/app/data
       - ./secrets/gcp-sa.json:/secrets/gcp.json:ro
-    env_file: [.env]
     environment:
+      DATABASE_URL: postgresql+asyncpg://pressplay:pressplay@db:5432/pressplay
+      SESSION_SECRET: ${SESSION_SECRET:-dev-change-me-set-in-env-for-production}
+      DEBUG: "false"
       GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp.json
-      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-${VERTEX_PROJECT}}
-      GCP_LOCATION: ${GCP_LOCATION:-${VERTEX_LOCATION:-us-central1}}
+volumes:
+  pressplay_pg:
 ```
 
-**Memvid shipping:** `memvid-sdk` is in `requirements.txt`; Whisper models (`memvid models install whisper-small`) and runtime ingest still require operator setup on host or image build step — see §17.
+**Memvid shipping:** `memvid-sdk` is installed in the Docker image with a best-effort Whisper model install at build time. Production operators should still verify `memvid` CLI + `whisper-small` on the host or bake a multi-stage image with the full CLI — see §17 and README ingest section.
 
 ---
 
@@ -417,18 +639,25 @@ services:
 
 ### 13.1 Index (`index.html`)
 
+- Positioning copy: **press kit factory** (auditable blog, social, graph; citations; editorial workflow)
 - YouTube URL input
+- **Content vertical** select: `events` (default) \| `sports` \| `corp`
 - Mode toggle: **Quick** / **Full**
 - Quick mode: duration control (**5–20 min**, default 10)
 - Submit → HTMX `hx-post="/api/jobs"` → `partials/job_progress.html`
 - Poll `GET /api/jobs/{id}` (`hx-trigger="every 2s"`) until `done` → link to `/newsroom/{id}`
-- **Past runs** from `ResultsRepository.list_recent()`
+- **Your recent press kits** from `list_recent(guest_session_id)` (guest-scoped)
+- Optional banner: guest session expiry (`guest_expires`, `guest_session_days`)
 
 ### 13.2 Newsroom (`newsroom.html`)
 
-- Blog: Markdown → HTML (server-side `markdown` library)
+- **Workflow** dropdown: `draft` → `in_review` → `approved` → `published` (`POST /newsroom/{id}/workflow`)
+- **Source citations** list with “Jump to moment” (`youtube_url&t=XXs`) when `start_sec` is set
+- Blog: Markdown → HTML; **edit form** (`POST /newsroom/{id}/save`) for blog + 3 tweets
+- **Partial regen** buttons: tweets, blog, graph (`POST /api/jobs/{id}/regenerate`)
 - Three tweet cards + copy-to-clipboard
-- D3 force graph: `graph.json` in `<script type="application/json" id="graph-data">` + `/static/js/graph.js`
+- D3 force graph: `graph.json` + `/static/js/graph.js`
+- **Export links:** `/api/v1/newsroom/{id}/export?format=markdown|json|slack`
 
 ### 13.3 Chrome / navigation
 
@@ -446,6 +675,11 @@ services:
 | 4 Mapper | `GraphifyService` (`graphify extract` + heuristic), D3 `graph.js`, `mapping` stage | **Done** |
 | 5 Paint | `ResultsRepository`, `/newsroom/{id}`, past runs, error partials, rate limit, concurrent cap=2 | **Done** |
 | 6 Deploy | GCP VM, HTTPS, public smoke test | **Not done** |
+| 7 Viability (B2B) | Citations, editorial workflow, v1 API/webhooks/export, brand.yaml, sports pilot doc | **Done** |
+| 8 Phase 0 — Stability | Watcher claim normalization/retry; audit `unified_context.txt`; Graphify `_build_graph_sync` fix; save() vertical param | **Done** |
+| 9 Phase 1 — Writing team | Strategist + Editor linter; pipeline stages; brand vertical packs | **Done** |
+| 10 Postgres MVP | `DATABASE_URL`, Alembic, guest sessions, docker-compose DB | **Done** |
+| 11 Deploy | GCP VM, HTTPS, public smoke test | **Not done** |
 
 ---
 
@@ -455,11 +689,49 @@ Per job `data/results/{id}/`:
 
 | File | Content |
 |------|---------|
-| `manifest.json` | id, youtube_url, mode, title, created_at, `pipeline_mock`, `llm_mock`, pipeline label |
-| `blog.md` | Markdown blog post |
+| `manifest.json` | id, youtube_url, mode, title, created_at, `workflow_status`, **`vertical`**, `pipeline_mock`, `llm_mock`, optional `ingest_duration_sec`, `gemini_model`, `graph_source` (`graphify` \| `heuristic` \| `stub`) |
+| `blog.md` | Markdown blog post (editable via newsroom save) |
 | `tweets.json` | Array of 3 tweets |
 | `graph.json` | D3-ready nodes/edges |
-| `summary.txt` | Watcher summary (optional, for debugging) |
+| `claims.json` | Array of `Claim` objects — **audit / citations** (backward-compatible: missing → empty list) |
+| `unified_context.txt` | Memvid unified context string — **audit** (written when non-empty) |
+| `strategist_brief.json` | `StrategistOutput` from Strategist agent |
+| `editor_report.json` | `EditorReport` from Editor linter (violations; job still completes) |
+| `summary.txt` | Watcher summary (used by partial regen) |
+
+**Postgres:** Same fields on `press_kits` row when `DATABASE_URL` is set (`unified_context`, `strategist_brief`, `editor_report`, `vertical`, `claims` JSONB, etc.). Filesystem-only dev may omit `vertical` on `manifest.json` until `ResultsRepository.save` writes it (see §5.3).
+
+### 15.2 Postgres schema (production MVP — shipped)
+
+When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
+
+| Table | Purpose |
+|-------|---------|
+| `guest_sessions` | `id` (UUID PK), `created_at`, `expires_at`, `last_seen_at` |
+| `jobs` | Pipeline state; `guest_session_id` FK; `status`, `stage`, `progress_*`, `mode`, `youtube_url`, `quick_minutes`, `vertical`, `error`, `result_url`, `webhook_url`, timestamps |
+| `press_kits` | Editorial artifacts; same `id` as job when complete; `guest_session_id` FK; `blog_post`, `tweets`/`graph`/`claims` JSONB, audit columns, `workflow_status`, mock flags |
+| `rate_limit_events` | Sliding-window job creation limits per guest + IP |
+
+**Guest session flow (`app/middleware/guest_session.py`):**
+
+1. Skip `/health`, `/static`, `/favicon.ico`.
+2. Read signed cookie `pressplay_session` or header `X-PressPlay-Session` (`itsdangerous.URLSafeTimedSerializer` + `SESSION_SECRET`).
+3. Valid token + non-expired row → `touch_guest_session`; else create new `guest_sessions` row and set cookie.
+4. Attach `request.state.guest` (`GuestContext`: `id`, `expires_at`).
+5. Cookie: HTTP-only, `SameSite=Lax`, `Secure` when `DEBUG=false`; max age `GUEST_SESSION_TTL_DAYS` (default **30**).
+
+**Future registered users:** add `users` table and `guest_sessions.user_id` without rewriting `press_kits` schema.
+
+---
+
+## 15.1 Phase 0 — Stability & audit (shipped)
+
+| Item | Implementation |
+|------|----------------|
+| Graphify CLI path | `GraphifyService._build_graph_sync` is a proper instance method; `asyncio.to_thread` invokes CLI extract reliably |
+| Watcher claims | `_normalize_claims`; retry with `WATCHER_RETRY_SUFFIX` when claims empty |
+| Audit disk artifacts | `claims.json` + `unified_context.txt` per job under `data/results/{id}/` |
+| Save API | `ResultsRepository.save(..., vertical=..., unified_context=..., strategist_brief=..., editor_report=...)` — fixed prior `NameError` on `vertical` kwarg |
 
 ---
 
@@ -467,31 +739,77 @@ Per job `data/results/{id}/`:
 
 - MP4 file upload UI
 - CrewAI / LangGraph library integration
-- User accounts / OAuth
-- Cloud SQL / Postgres
+- User accounts / OAuth / SSO (guest sessions are **not** registered users)
+- Org tenancy / per-org API keys
+- Managed Cloud SQL (v1 uses **Postgres in docker-compose** on the same VM; not a separate managed DB product)
 - Graphify HTML visualization (using D3 only)
 - Playlist / multi-video batch processing
 - Serverless-only deployment without a persistent worker VM
+- Automated claim verification (entailment model) — citations are model-generated, not cryptographically proven
+- WordPress/HubSpot push integrations (export formats only; no OAuth to CMS)
 
 ---
 
 ## 17. Open Items & Blockers
 
-### Resolved this session
+### Resolved (hackathon + viability pass)
 
-- [x] **Vertex vs Agent Platform SDK** — **`google-genai`** with `vertexai=True` and `GeminiAdapter`; not legacy `google-cloud-aiplatform`–only
+- [x] **Vertex vs Agent Platform SDK** — **`google-genai`** with `vertexai=True` and `GeminiAdapter`
 - [x] **Concurrent jobs** — **`MAX_CONCURRENT_JOBS=2`** locked for v1
-- [x] **Frontend visual design** — HTML mock tokens applied in Jinja (`base.html`); behavior per spec
-- [x] **Graphify packaging** — pip package **`graphifyy`**, CLI binary **`graphify`**; subcommand **`graphify extract`**
-- [x] **GCP auth** — **Pattern C** documented and implemented (ADC local, SA JSON in Docker)
-- [x] **Mock strategy** — `MOCK_LLM` / missing GCP vs `PRESSPLAY_USE_MOCK=1` (see §10.1)
-- [x] **API surface** — YouTube-only, `POST /api/jobs` + HTMX poll, `/newsroom/{id}`, Quick/Full modes
+- [x] **Frontend visual design** — HTML mock tokens in Jinja (`base.html`)
+- [x] **Graphify packaging** — **`graphifyy`**, CLI **`graphify extract`**
+- [x] **GCP auth** — **Pattern C** (ADC local, SA JSON in Docker)
+- [x] **Mock strategy** — §10.1
+- [x] **HTMX API** — YouTube-only, jobs poll, `/newsroom/{id}`, Quick/Full
+- [x] **Watcher structured output** — `WatcherOutput` + `claims.json` + newsroom citation UI
+- [x] **Writer grounding** — claims in prompt; optional `claim_refs`; `brand.yaml` injection
+- [x] **Editorial workflow** — save edits, workflow states, partial regen (`regen.py`)
+- [x] **JSON API v1** — `POST/GET /api/v1/jobs`, export, webhooks
+- [x] **Docker / run.sh ingest** — memvid-sdk + Whisper install hints/checks
+- [x] **Sports pilot doc** — `docs/PILOT_SPORTS.md`, `config/brand.yaml.example`
+- [x] **Phase 0 stability** — Watcher normalization/retry, audit artifacts, Graphify sync fix
+- [x] **Phase 1 writing team** — Strategist, Editor linter, extended pipeline stages
+- [x] **Vertical brand packs** — `brand-{vertical}.yaml`, job/API `vertical`
+- [x] **Postgres MVP** — `DATABASE_URL`, guest sessions, Alembic, ownership, `/health/ready`, CI, `smoke_mvp.sh`
+- [x] **`brand_banned_phrases` / `brand_max_tweet_chars`** — restored in `app/services/brand.py` for EditorLinter
 
 ### Still open / blockers
 
-- [ ] **Memvid + Whisper on demo machine** — install CLI/models (`pip install memvid-sdk`, `memvid models install whisper-small`); ingest fails without them
-- [ ] **`GEMINI_API_KEY` for Graphify CLI** (optional) — semantic `graphify extract --backend gemini` may need API key; Vertex SA/ADC alone may not suffice; heuristic graph acceptable for demo
-- [ ] **GCP production deploy** — VM, HTTPS, smoke test on public URL
-- [ ] **Nav chrome** — Sources / Analytics links decorative only (§13.3)
-- [ ] **Optional:** CrewAI in repo for pitch parity only (not required for v1)
-- [ ] **`run.sh` vs mock-only dev** — `run.sh` requires `GCP_PROJECT_ID`; use direct `uvicorn` or set project when doing UI-only mock demos
+- [ ] **Memvid + Whisper on demo machine** — verify `memvid models install whisper-small` after deploy; Docker build only best-effort
+- [ ] **`GEMINI_API_KEY` for Graphify CLI** (optional) — heuristic graph acceptable when unset
+- [ ] **GCP production deploy** — VM, HTTPS, public smoke test
+- [ ] **Nav chrome** — Sources / Analytics decorative (§13.3)
+- [ ] **Optional:** CrewAI in repo for pitch parity only
+- [ ] **`run.sh` vs mock-only dev** — `run.sh` requires `GCP_PROJECT_ID`; use `PRESSPLAY_USE_MOCK=1` + direct `uvicorn` for UI-only demos
+- [ ] **Partial regen** — wire Strategist + Editor on `regen.py`; Editor lint should use job `vertical`
+- [ ] **Filesystem manifest.vertical** — persist `vertical` in `ResultsRepository` manifest for FS-only dev
+- [ ] **Tier C (future)** — claim verification, corpus/playlist ingest, multi-tenant auth, CMS OAuth push
+
+---
+
+## 18. Product direction & roadmap (grill-me)
+
+Decisions captured as **product direction**. Only items marked **shipped** exist in code today.
+
+| Theme | Decision | Status |
+|-------|----------|--------|
+| **Positioning** | Press kit **factory** with governance first; “head of media” automation is **Phase 3**, not v1 | **Direction** |
+| **Verticals** | All three beats via **brand packs** (`sports`, `events`, `corp`) | **Shipped** (packs + job `vertical`) |
+| **Grounding** | **Human review MVP** — citations + workflow; automated **coverage gate** (claim ↔ copy) | **Phase 2** (not built) |
+| **Voice** | Brand voice evolves from **published kits** only (learn from approved output) | **Future** |
+| **Memvid** | **Dual index:** per-video ingest (shipped) + **org corpus** Memvid for cross-event context | **Per-video shipped**; **org corpus Phase 2** |
+| **Publish** | **Always draft-first**; conditional auto-publish when confidence + policy allow | **Draft-first shipped**; auto-publish **Phase 3** |
+| **Infra** | **GCP VM** + Docker Compose (Postgres + API); **GCS backup** for `data/` / artifacts | **Compose + Postgres MVP shipped**; **GCS backup not built** |
+| **Architecture** | **Thin pipeline**; add frameworks (CrewAI/LangGraph) only when agent loops become painful | **Current: thin orchestrator shipped** |
+| **Calendar** | Content calendar / scheduling integrations | **Not built** |
+| **Claim verification** | Entailment or coverage model vs Watcher claims | **Not built** (§16) |
+
+### Phase map (summary)
+
+| Phase | Focus | Status |
+|-------|--------|--------|
+| **0** | Stability, audit artifacts, Graphify/Watcher/save fixes | **Shipped** |
+| **1** | Strategist + Editor + vertical brand packs | **Shipped** |
+| **1b** | Postgres persistence, guest sessions, deploy polish (CI, smoke test) | **Shipped** |
+| **2** | Coverage gates, org Memvid corpus, stronger grounding automation | **Planned** |
+| **3** | Head-of-media orchestration, conditional auto-publish, GCS backup, calendar, registered users | **Planned** |

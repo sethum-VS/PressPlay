@@ -15,3 +15,6 @@ secrets/
 .pytest_cache/
 .coverage
 htmlcov/
+secrets/gcp-sa.json
+cloud-sql-proxy*
+data/temp/
