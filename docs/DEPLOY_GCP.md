@@ -23,7 +23,8 @@ The legacy GCE VM path (`docker-compose.prod.yml`, port `:8000`) is retained for
 | `pressplay-session-secret` | `SESSION_SECRET` |
 | `pressplay-database-url` | `DATABASE_URL` (Cloud SQL unix socket) |
 | `pressplay-db-password` | *(used to build `pressplay-database-url`)* |
-| `pressplay-rapidapi-key` *(optional)* | `RAPIDAPI_KEY` — YouTube download fallback on datacenter IPs |
+| `pressplay-youtube-cookies` *(recommended)* | File mount → `YOUTUBE_COOKIES_PATH=/secrets/youtube-cookies.txt` — Netscape `cookies.txt` for yt-dlp (open-source production ingest) |
+| `pressplay-rapidapi-key` *(optional)* | `RAPIDAPI_KEY` — paid YouTube download fallback when yt-dlp still fails |
 
 Production is **open** (no shared password). Abuse protection is enforced in-app and via Cloud Run env (see below).
 
@@ -132,9 +133,45 @@ For a fresh demo, bootstrap creates an empty Cloud SQL database; Alembic runs on
 
 ## YouTube downloads on Cloud Run
 
-PressPlay uses **yt-dlp** without browser cookies. YouTube often blocks **datacenter IPs** (including Cloud Run) with “confirm you're not a bot” / sign-in challenges. There is no cookie or account sign-in flow in v1.
+PressPlay uses **yt-dlp** (open source) with **ffmpeg** trim. YouTube often blocks **datacenter IPs** (including Cloud Run) with “confirm you're not a bot” / sign-in challenges.
 
-**Recommended production fallback:** subscribe to [YouTube Video Downloader Fast on RapidAPI](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast), store the key in Secret Manager, and deploy with external download enabled.
+**Recommended production (open source):** export browser **Netscape** `cookies.txt` from a dedicated Google account used only for ingestion (not end-user login in the app). Store in Secret Manager and mount on Cloud Run so `YOUTUBE_COOKIES_PATH` points at the file. PressPlay passes it to yt-dlp as `cookiefile`. Rotate cookies periodically.
+
+**Optional paid fallback:** [YouTube Video Downloader Fast on RapidAPI](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) when `YOUTUBE_DOWNLOAD_PROVIDER=auto` and `RAPIDAPI_KEY` is set — use only if cookies are unavailable or exhausted.
+
+### YouTube cookies (open-source production)
+
+1. Sign into YouTube in Chrome or Firefox with a **service / burner account** (org policy and YouTube ToS are your responsibility).
+2. Export cookies in **Netscape** format to `cookies.txt` (browser extension such as “Get cookies.txt LOCALLY”, or `yt-dlp --cookies-from-browser chrome` once locally then copy the file).
+3. **Never commit** `cookies.txt` — it lives under `secrets/` (gitignored).
+
+```bash
+# One-time: create secret from exported file
+gcloud secrets create pressplay-youtube-cookies \
+  --project=PROJECT_ID --data-file=./cookies.txt
+
+# Rotate after re-export
+gcloud secrets versions add pressplay-youtube-cookies \
+  --project=PROJECT_ID --data-file=./cookies.txt
+
+gcloud secrets add-iam-policy-binding pressplay-youtube-cookies \
+  --project=PROJECT_ID \
+  --member="serviceAccount:pressplay-runtime@PROJECT_ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+
+gcloud run services update pressplay \
+  --project=PROJECT_ID --region=us-central1 \
+  --update-secrets=/secrets/youtube-cookies.txt=pressplay-youtube-cookies:latest \
+  --set-env-vars=YOUTUBE_COOKIES_PATH=/secrets/youtube-cookies.txt
+```
+
+`.github/workflows/deploy.yml` mounts the same secret path and sets `YOUTUBE_COOKIES_PATH` on each deploy (secret must exist in the project before deploy succeeds).
+
+**Local dev:** `YOUTUBE_COOKIES_PATH=secrets/youtube-cookies.txt` in `.env` with `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp`.
+
+**Optional:** `YOUTUBE_PO_TOKEN` — comma-separated PO tokens per [yt-dlp PO Token Guide](https://github.com/yt-dlp/yt-dlp/wiki/PO-Token-Guide) if cookies alone are insufficient.
+
+## RapidAPI fallback (optional)
 
 ### RapidAPI request contract (skdeveloper)
 

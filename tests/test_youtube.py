@@ -1,5 +1,8 @@
-"""YouTube download error mapping."""
+"""YouTube download error mapping and yt-dlp options."""
 
+from pathlib import Path
+
+from app.config import Settings
 from app.services.youtube import YouTubeService
 
 
@@ -18,5 +21,29 @@ def test_map_download_error_does_not_false_positive_on_login_substring() -> None
 
 
 def test_base_ydl_opts_includes_youtube_player_client() -> None:
-    opts = YouTubeService._base_ydl_opts()
-    assert opts["extractor_args"]["youtube"]["player_client"] == ["android", "web"]
+    opts = YouTubeService()._base_ydl_opts()
+    assert opts["extractor_args"]["youtube"]["player_client"] == [
+        "mweb",
+        "android",
+        "web",
+    ]
+
+
+def test_base_ydl_opts_cookiefile_when_cookies_path_set(tmp_path: Path) -> None:
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(
+        "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tx\ty\n",
+        encoding="utf-8",
+    )
+    settings = Settings(youtube_cookies_path=str(cookies))
+    opts = YouTubeService(settings=settings)._base_ydl_opts()
+    assert opts["cookiefile"] == str(cookies)
+
+
+def test_base_ydl_opts_po_token_when_set() -> None:
+    settings = Settings(youtube_po_token="mweb.gvs+TOKEN,android.gvs+TOKEN2")
+    opts = YouTubeService(settings=settings)._base_ydl_opts()
+    assert opts["extractor_args"]["youtube"]["po_token"] == [
+        "mweb.gvs+TOKEN",
+        "android.gvs+TOKEN2",
+    ]

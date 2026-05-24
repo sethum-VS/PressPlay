@@ -337,8 +337,16 @@ def fetch_via_apify(
 
 
 def missing_fallback_config_message(settings: Settings) -> str:
+    if settings.youtube_cookies_file is None:
+        return (
+            "YouTube blocked automated download from this server (common on cloud IPs). "
+            "Mount operator-exported Netscape cookies via YOUTUBE_COOKIES_PATH "
+            "(Secret Manager pressplay-youtube-cookies on Cloud Run). "
+            "Optional paid fallbacks: RAPIDAPI_KEY or APIFY_API_TOKEN with "
+            "YOUTUBE_DOWNLOAD_PROVIDER=auto. Or run PressPlay locally."
+        )
     return (
-        "YouTube blocked automated download from this server (common on cloud IPs). "
-        "Set RAPIDAPI_KEY (or APIFY_API_TOKEN) and YOUTUBE_DOWNLOAD_PROVIDER=auto on Cloud Run, "
-        "or run PressPlay locally. Sign-in and cookies are not supported in v1."
+        "YouTube blocked download even with configured cookies. "
+        "Rotate cookies.txt (dedicated service account), or set RAPIDAPI_KEY / "
+        "APIFY_API_TOKEN with YOUTUBE_DOWNLOAD_PROVIDER=auto."
     )

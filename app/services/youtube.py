@@ -46,19 +46,30 @@ class YouTubeService:
     def __init__(self, settings: Settings | None = None) -> None:
         self.settings = settings or get_settings()
 
-    @staticmethod
-    def _base_ydl_opts() -> dict:
+    def _base_ydl_opts(self) -> dict:
         """Defaults for server/datacenter IPs (e.g. Cloud Run) and current YouTube player."""
-        return {
+        youtube_args: dict[str, list[str]] = {
+            "player_client": ["mweb", "android", "web"],
+        }
+        po_raw = self.settings.youtube_po_token.strip()
+        if po_raw:
+            tokens = [t.strip() for t in po_raw.split(",") if t.strip()]
+            if tokens:
+                youtube_args["po_token"] = tokens
+
+        opts: dict = {
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
             "retries": 3,
             "fragment_retries": 3,
             "socket_timeout": 30,
-            # Prefer clients that work without browser cookies on cloud IPs.
-            "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+            "extractor_args": {"youtube": youtube_args},
         }
+        cookies = self.settings.youtube_cookies_file
+        if cookies is not None:
+            opts["cookiefile"] = str(cookies)
+        return opts
 
     def validate_url(self, url: str) -> str:
         url = url.strip()

@@ -37,6 +37,8 @@ class Settings(BaseSettings):
 
     # YouTube ingest: ytdlp | rapidapi | apify | auto (ytdlp then configured fallbacks)
     youtube_download_provider: str = "ytdlp"
+    youtube_cookies_path: str = ""
+    youtube_po_token: str = ""
     rapidapi_key: str = ""
     apify_api_token: str = ""
 
@@ -101,6 +103,17 @@ class Settings(BaseSettings):
     @property
     def session_cookie_secure(self) -> bool:
         return not self.debug
+
+    @property
+    def youtube_cookies_file(self) -> Path | None:
+        """Netscape cookies.txt for yt-dlp when path exists and is non-empty."""
+        raw = self.youtube_cookies_path.strip()
+        if not raw:
+            return None
+        path = Path(raw)
+        if not path.is_file() or path.stat().st_size == 0:
+            return None
+        return path
 
     def gcp_credential_warnings(self) -> list[str]:
         """Non-fatal misconfig hints (e.g. Docker mount missing)."""
