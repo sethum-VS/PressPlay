@@ -70,10 +70,39 @@ def resolve_provider_chain(settings: Settings) -> list[DownloadProvider]:
 
 def _rapidapi_headers(api_key: str) -> dict[str, str]:
     return {
-        "X-RapidAPI-Key": api_key,
-        "X-RapidAPI-Host": RAPIDAPI_HOST,
+        "x-rapidapi-key": api_key,
+        "x-rapidapi-host": RAPIDAPI_HOST,
         "Content-Type": "application/x-www-form-urlencoded",
     }
+
+
+def _rapidapi_failure_message(payload: dict[str, Any]) -> str | None:
+    """Map skdeveloper error/quota payloads to a user-facing message."""
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()[:400]
+
+    error = payload.get("error")
+    if not error:
+        return None
+
+    err_text = str(error).strip()
+    nested = payload.get("response")
+    if isinstance(nested, dict):
+        status = nested.get("statusCode") or nested.get("status")
+        detail = nested.get("error") or nested.get("message") or ""
+        medias = nested.get("medias")
+        if medias == [] or (isinstance(medias, list) and not medias):
+            parts = [err_text]
+            if status:
+                parts.append(f"upstream status {status}")
+            if detail:
+                parts.append(str(detail).strip()[:120])
+            return (
+                "RapidAPI YouTube downloader returned no media links "
+                f"({'; '.join(parts)})."
+            )[:400]
+    return f"RapidAPI error: {err_text}"[:400]
 
 
 def request_rapidapi_links(url: str, api_key: str, *, timeout: float = 60.0) -> dict[str, Any]:
@@ -85,16 +114,40 @@ def request_rapidapi_links(url: str, api_key: str, *, timeout: float = 60.0) -> 
             headers=_rapidapi_headers(api_key),
             data={"url": url},
         )
+        if response.status_code == 403:
+            raise ValueError(
+                "RapidAPI rejected the request (403). Check subscription and "
+                "x-rapidapi-key for YouTube Video Downloader Fast."
+            )
+        if response.status_code == 429:
+            raise ValueError(
+                "RapidAPI rate limit exceeded (429). Retry later or upgrade plan."
+            )
         response.raise_for_status()
         payload = response.json()
     if not isinstance(payload, dict):
         raise ValueError("RapidAPI response was not a JSON object.")
+    failure = _rapidapi_failure_message(payload)
+    if failure:
+        raise ValueError(failure)
     return payload
 
 
 def pick_mp4_url(payload: Any) -> str:
     """Select best MP4 direct URL from a flexible RapidAPI / Apify JSON shape."""
-    candidates = _collect_mp4_candidates(payload)
+    if isinstance(payload, dict):
+        medias = payload.get("medias")
+        if medias is None and isinstance(payload.get("response"), dict):
+            medias = payload["response"].get("medias")
+        if isinstance(medias, list) and medias:
+            media_candidates = _collect_mp4_candidates(medias, "medias")
+            if media_candidates:
+                payload = media_candidates
+
+    if isinstance(payload, list) and payload and isinstance(payload[0], tuple):
+        candidates = payload
+    else:
+        candidates = _collect_mp4_candidates(payload)
     if not candidates:
         raise ValueError("No MP4 download link found in provider response.")
 

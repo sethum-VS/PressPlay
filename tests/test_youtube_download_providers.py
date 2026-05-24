@@ -73,10 +73,43 @@ def test_request_rapidapi_links_posts_form_body() -> None:
     mock_client.post.assert_called_once()
     call_kwargs = mock_client.post.call_args.kwargs
     assert call_kwargs["data"] == {"url": "https://www.youtube.com/watch?v=abc"}
-    assert call_kwargs["headers"]["X-RapidAPI-Host"] == (
+    assert call_kwargs["headers"]["x-rapidapi-host"] == (
         "youtube-video-downloader-fast.p.rapidapi.com"
     )
+    assert call_kwargs["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
     assert data["title"] == "Launch"
+
+
+def test_request_rapidapi_links_raises_on_quota_message() -> None:
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "message": "You have exceeded the MONTHLY quota for Requests on your current plan, BASIC."
+    }
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = mock_response
+
+    with patch("app.services.youtube_download.providers.httpx.Client", return_value=mock_client):
+        try:
+            request_rapidapi_links("https://www.youtube.com/watch?v=abc", "key")
+            assert False, "expected ValueError"
+        except ValueError as exc:
+            assert "quota" in str(exc).lower()
+
+
+def test_pick_mp4_url_from_medias_list() -> None:
+    payload = {
+        "title": "Demo",
+        "medias": [
+            {"url": "https://cdn.example/360.mp4", "quality": "360p", "extension": "mp4"},
+            {"url": "https://cdn.example/720.mp4", "quality": "720p", "extension": "mp4"},
+        ],
+    }
+    assert pick_mp4_url(payload) == "https://cdn.example/720.mp4"
 
 
 def test_fetch_via_rapidapi_streams_file(tmp_path: Path) -> None:

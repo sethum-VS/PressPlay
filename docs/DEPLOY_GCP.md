@@ -136,9 +136,26 @@ PressPlay uses **yt-dlp** without browser cookies. YouTube often blocks **datace
 
 **Recommended production fallback:** subscribe to [YouTube Video Downloader Fast on RapidAPI](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast), store the key in Secret Manager, and deploy with external download enabled.
 
+### RapidAPI request contract (skdeveloper)
+
+PressPlay calls this API from `app/services/youtube_download/providers.py`:
+
+| Item | Value |
+|------|--------|
+| Host | `youtube-video-downloader-fast.p.rapidapi.com` |
+| Method | `POST` `/download.php` |
+| Headers | `x-rapidapi-key`, `x-rapidapi-host`, `Content-Type: application/x-www-form-urlencoded` |
+| Body | form field `url` = full YouTube watch URL |
+
+Successful JSON includes downloadable links (often a `medias` array). Errors may be HTTP **403** (bad key/subscription), **429** (rate limit), or HTTP 200 with `message` (quota) / `error` + empty `medias` (upstream fetch failed).
+
 ```bash
-# One-time: create secret (replace with your RapidAPI key)
+# One-time: create secret (replace with your RapidAPI key; never commit the key)
 echo -n 'YOUR_RAPIDAPI_KEY' | gcloud secrets create pressplay-rapidapi-key \
+  --project=PROJECT_ID --data-file=-
+
+# Rotate key after subscribing on RapidAPI
+printf '%s' "$RAPIDAPI_KEY" | gcloud secrets versions add pressplay-rapidapi-key \
   --project=PROJECT_ID --data-file=-
 
 # Grant runtime SA access
@@ -146,12 +163,17 @@ gcloud secrets add-iam-policy-binding pressplay-rapidapi-key \
   --project=PROJECT_ID \
   --member="serviceAccount:pressplay-runtime@PROJECT_ID.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
+
+# Point Cloud Run at latest secret version (no full image rebuild required)
+gcloud run services update pressplay \
+  --project=PROJECT_ID --region=us-central1 \
+  --update-secrets=RAPIDAPI_KEY=pressplay-rapidapi-key:latest
 ```
 
-Add to `gcloud run deploy` (or extend `.github/workflows/deploy.yml`):
+`.github/workflows/deploy.yml` already sets:
 
-- `--set-secrets=RAPIDAPI_KEY=pressplay-rapidapi-key:latest` (append to existing `--set-secrets`)
-- `--set-env-vars=...,YOUTUBE_DOWNLOAD_PROVIDER=auto`
+- `--set-secrets=...,RAPIDAPI_KEY=pressplay-rapidapi-key:latest`
+- `YOUTUBE_DOWNLOAD_PROVIDER=auto`
 
 | Env var | Cloud Run value | Purpose |
 |---------|-----------------|--------|
@@ -159,6 +181,8 @@ Add to `gcloud run deploy` (or extend `.github/workflows/deploy.yml`):
 | `RAPIDAPI_KEY` | Secret Manager | [skdeveloper YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) |
 | `APIFY_API_TOKEN` | *(optional secret)* | Second fallback via Apify actor `tazy/youtube-converter` |
 
-**Local dev:** leave `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp` (default) so residential IPs keep using yt-dlp only.
+**Local dev:** leave `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp` (default) so residential IPs keep using yt-dlp only. Put `RAPIDAPI_KEY` in `.env` (gitignored) to test `auto` locally.
 
 **Without `RAPIDAPI_KEY`:** bot blocks still surface a clear job error suggesting configuration or running locally (`./run.sh`).
+
+**Revision note (2026-05-25):** After rotating `pressplay-rapidapi-key`, confirm active revision with `gcloud run services describe pressplay --format='value(status.latestReadyRevisionName)'`. Quota/plan limits on RapidAPI BASIC can surface as job errors even when the key is valid.
