@@ -4,12 +4,20 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Memvid SDK (Python); video ingest still needs memvid CLI on PATH in production images.
+# Optional: build memvid-cli with Whisper in a multi-stage image — see README ingest section.
+RUN pip install --no-cache-dir memvid-sdk \
+    && (memvid models install whisper-small 2>/dev/null || true)
+
 COPY app ./app
+COPY alembic ./alembic
+COPY alembic.ini .
 COPY scripts ./scripts
 
 RUN mkdir -p data/jobs data/results
@@ -21,4 +29,4 @@ ENV PYTHONPATH=/app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]

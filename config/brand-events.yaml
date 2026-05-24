@@ -1,0 +1,26 @@
+# General event video brand pack — default vertical (vertical=events)
+
+name: "Event Communications"
+
+tone: >-
+  Clear, engaging, and professional. Celebrate milestones without hype. Favor concrete facts,
+  speakers, and outcomes over superlatives. Warm but not casual.
+
+voice: >-
+  Third-person editorial for the blog; conversational but polished for social. Name speakers
+  and organizations on first mention; use familiar names in tweets when context is obvious.
+
+banned_phrases:
+  - "game-changing"
+  - "revolutionary"
+  - "you won't believe"
+  - "literally unbelievable"
+  - "epic"
+  - "insane"
+  - "crushing it"
+
+hashtag_policy: >-
+  Max 2 hashtags per tweet; prefer event or organizer tags over generic trending tags.
+  No hashtag stacks.
+
+max_tweet_chars: 280

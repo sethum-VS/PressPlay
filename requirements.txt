@@ -10,3 +10,13 @@ yt-dlp>=2024.10.0
 graphifyy>=0.8.0
 memvid-sdk>=2.0.0
 google-genai>=1.0.0
+PyYAML>=6.0.0
+sqlalchemy[asyncio]>=2.0.36
+asyncpg>=0.30.0
+greenlet>=3.1.0
+alembic>=1.14.0
+itsdangerous>=2.2.0
+
+# Dev / test
+pytest>=8.3.0
+pytest-asyncio>=0.24.0

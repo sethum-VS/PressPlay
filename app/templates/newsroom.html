@@ -9,9 +9,53 @@
   </a>
   <h1 class="font-display-md text-display-md text-ink">{{ result.title }}</h1>
   <p class="font-caption text-caption text-muted">
-    {{ result.mode.value }} mode · <a href="{{ result.youtube_url }}" class="text-primary hover:underline" target="_blank" rel="noopener">Source video</a>
+    {{ result.mode.value }} mode ·
+    <span class="capitalize">{{ result.workflow_status.value | replace('_', ' ') }}</span> ·
+    <a href="{{ result.youtube_url }}" class="text-primary hover:underline" target="_blank" rel="noopener">Source video</a>
   </p>
 </header>
+
+<section class="flex flex-wrap gap-sm items-end border border-hairline rounded-lg p-md bg-surface-card">
+  <form method="post" action="/newsroom/{{ result.id }}/workflow" class="flex flex-wrap gap-sm items-end">
+    <label class="font-caption text-caption text-muted flex flex-col gap-1">
+      Workflow
+      <select name="workflow_status" class="border border-hairline-strong rounded px-2 py-1 font-body-sm">
+        {% for ws in workflow_statuses %}
+        <option value="{{ ws }}" {% if result.workflow_status.value == ws %}selected{% endif %}>{{ ws | replace('_', ' ') }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="font-button text-button bg-primary text-on-primary px-3 py-1 rounded">Update status</button>
+  </form>
+  <div class="flex gap-2 ml-auto">
+    <form method="post" action="/api/jobs/{{ result.id }}/regenerate"><input type="hidden" name="part" value="tweets"><button type="submit" class="font-button text-button text-primary border border-hairline-strong px-2 py-1 rounded">Regen tweets</button></form>
+    <form method="post" action="/api/jobs/{{ result.id }}/regenerate"><input type="hidden" name="part" value="blog"><button type="submit" class="font-button text-button text-primary border border-hairline-strong px-2 py-1 rounded">Regen blog</button></form>
+    <form method="post" action="/api/jobs/{{ result.id }}/regenerate"><input type="hidden" name="part" value="graph"><button type="submit" class="font-button text-button text-primary border border-hairline-strong px-2 py-1 rounded">Regen graph</button></form>
+  </div>
+</section>
+
+{% if result.claims %}
+<section class="flex flex-col gap-sm">
+  <h2 class="font-title-md text-title-md text-ink border-b border-hairline pb-xs">Source citations</h2>
+  <ul class="bg-surface-card border border-hairline rounded-lg divide-y divide-hairline">
+    {% for claim in result.claims %}
+    <li class="p-md flex flex-col gap-1">
+      <p class="font-body-sm text-body-sm text-ink">{{ claim.text }}</p>
+      <p class="font-caption text-caption text-muted flex flex-wrap gap-2 items-center">
+        <span>{{ claim.source.value }}</span>
+        {% set jump = claim_jump_url(claim) %}
+        {% if jump %}
+        <a href="{{ jump }}" target="_blank" rel="noopener" class="text-primary hover:underline flex items-center gap-1">
+          <span class="material-symbols-outlined text-[14px]">play_circle</span>
+          Jump to moment{% if claim.start_sec is not none %} ({{ claim.start_sec | int }}s){% endif %}
+        </a>
+        {% endif %}
+      </p>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 <div class="grid grid-cols-1 lg:grid-cols-12 gap-lg w-full">
   <div class="lg:col-span-8 flex flex-col gap-md">
@@ -24,10 +68,27 @@
     <article class="bg-surface-card border border-hairline p-lg rounded-xl prose prose-slate max-w-none prose-headings:font-display-sm prose-p:font-body-md prose-p:text-body prose-a:text-primary hover:prose-a:text-primary-active">
       {{ blog_html | safe }}
       <div class="mt-8 pt-4 border-t border-hairline flex items-center justify-between not-prose">
-        <span class="bg-timeline-done text-on-surface font-caption-uppercase text-caption-uppercase px-[10px] py-[4px] rounded-full border border-hairline-strong shadow-sm">Final Draft</span>
+        <span class="bg-timeline-done text-on-surface font-caption-uppercase text-caption-uppercase px-[10px] py-[4px] rounded-full border border-hairline-strong shadow-sm">{{ result.workflow_status.value | replace('_', ' ') }}</span>
         <span class="font-code text-code text-muted">{{ pipeline_label }}</span>
       </div>
     </article>
+
+    <details class="bg-surface-card border border-hairline rounded-lg p-md">
+      <summary class="font-title-sm text-title-sm text-ink cursor-pointer">Edit blog &amp; tweets</summary>
+      <form method="post" action="/newsroom/{{ result.id }}/save" class="flex flex-col gap-md mt-md">
+        <label class="flex flex-col gap-1 font-caption text-caption text-muted">
+          Blog (Markdown)
+          <textarea name="blog_post" rows="12" class="w-full border border-hairline-strong rounded-lg p-2 font-mono text-sm">{{ result.blog_post }}</textarea>
+        </label>
+        {% for i in range(3) %}
+        <label class="flex flex-col gap-1 font-caption text-caption text-muted">
+          Tweet {{ i + 1 }}
+          <textarea name="tweet_{{ i + 1 }}" rows="2" class="w-full border border-hairline-strong rounded-lg p-2 text-sm">{{ result.tweets[i] if result.tweets|length > i else '' }}</textarea>
+        </label>
+        {% endfor %}
+        <button type="submit" class="font-button text-button bg-primary text-on-primary px-4 py-2 rounded w-fit">Save edits</button>
+      </form>
+    </details>
   </div>
 
   <div class="lg:col-span-4 flex flex-col gap-xl">
@@ -73,6 +134,13 @@
         <svg id="graph-svg" class="w-full h-full relative z-10"></svg>
       </div>
     </div>
+
+    <p class="font-caption text-caption text-muted">
+      Export:
+      <a href="/api/v1/newsroom/{{ result.id }}/export?format=markdown" class="text-primary hover:underline">Markdown</a> ·
+      <a href="/api/v1/newsroom/{{ result.id }}/export?format=json" class="text-primary hover:underline">JSON</a> ·
+      <a href="/api/v1/newsroom/{{ result.id }}/export?format=slack" class="text-primary hover:underline">Slack</a>
+    </p>
   </div>
 </div>
 {% endblock %}

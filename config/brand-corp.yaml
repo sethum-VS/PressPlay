@@ -1,0 +1,28 @@
+# Internal corporate communications brand pack — vertical=corp
+
+name: "Internal Comms"
+
+tone: >-
+  Professional, inclusive, and matter-of-fact. Acknowledge contributors by role or team where
+  appropriate. Avoid sensationalism; emphasize decisions, impact, and next steps.
+
+voice: >-
+  Company “we” for internal audiences in blog copy; tweets may use “we” or neutral third person.
+  Plain language; define acronyms on first use in the blog. No competitor mentions unless
+  already in the source video.
+
+banned_phrases:
+  - "rockstar"
+  - "ninja"
+  - "crushing it"
+  - "synergy"
+  - "disrupt"
+  - "bleeding edge"
+  - "world-class"  # unless tied to a verifiable award or metric
+  - "family"
+
+hashtag_policy: >-
+  No hashtags in tweets unless the comms team has a mandated internal campaign tag; if used,
+  max 1 per tweet.
+
+max_tweet_chars: 280

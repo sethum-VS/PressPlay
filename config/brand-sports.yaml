@@ -1,0 +1,27 @@
+# Sports post-game brand pack — used when vertical=sports
+
+name: "League Post-Game"
+
+tone: >-
+  Confident, energetic, fan-forward. Short sentences. Present tense for live action;
+  past tense for final scores. Neutral on officiating unless quoting on-record statements.
+
+voice: >-
+  Official league voice — authoritative but accessible. Prefer team names over nicknames
+  in headlines; nicknames OK in tweets. Lead with the result, then standout plays and quotes.
+
+banned_phrases:
+  - "game-changing"
+  - "literally"
+  - "you won't believe"
+  - "slammed"
+  - "destroyed"
+  - "robbed"
+  - "choke"
+  - "must-win"
+
+hashtag_policy: >-
+  Max 2 hashtags per tweet; include official league tag when provided; team tags only for
+  clubs mentioned in that tweet.
+
+max_tweet_chars: 280

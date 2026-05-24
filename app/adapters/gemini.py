@@ -16,16 +16,56 @@ from typing import TypeVar
 from pydantic import BaseModel, ValidationError
 
 from app.config import Settings, get_settings
+from app.domain.models import WatcherOutput
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+MOCK_WATCHER_OUTPUT_JSON = {
+    "summary": (
+        "Chronological summary (mock): The broadcast opens with pre-launch pad views. "
+        "Countdown proceeds to liftoff; Falcon 9 ascends with Starlink V2 Mini payloads. "
+        "Deployment is confirmed in orbit; the first stage returns and lands on the droneship."
+    ),
+    "claims": [
+        {
+            "text": "Falcon 9 lifts off from the pad during twilight.",
+            "start_sec": 42.0,
+            "end_sec": 55.0,
+            "source": "visual",
+        },
+        {
+            "text": "Mission control confirms payload deployment in orbit.",
+            "start_sec": 180.0,
+            "end_sec": 200.0,
+            "source": "transcript",
+        },
+        {
+            "text": "First stage lands on the droneship A Shortfall of Gravitas.",
+            "start_sec": 320.0,
+            "end_sec": 360.0,
+            "source": "visual",
+        },
+    ],
+}
 
 MOCK_WATCHER_SUMMARY = (
     "Chronological summary (mock): The broadcast opens with pre-launch pad views. "
     "Countdown proceeds to liftoff; Falcon 9 ascends with Starlink V2 Mini payloads. "
     "Deployment is confirmed in orbit; the first stage returns and lands on the droneship."
 )
+
+MOCK_STRATEGIST_OUTPUT_JSON = {
+    "angle": "Reusable launch milestone — precision engineering and global connectivity",
+    "target_audience": "Space enthusiasts, industry press, and Starlink stakeholders",
+    "thread_hook": "Twilight liftoff, next-gen V2 Mini payloads, and a droneship landing to close the loop",
+    "omit_topics": [
+        "unrelated launch delays on other pads",
+        "speculation about future Starship dates",
+        "political commentary",
+    ],
+}
 
 MOCK_WRITER_OUTPUT_JSON = {
     "blog_post": """# SpaceX Successfully Deploys Starlink V2 Mini Satellites
@@ -109,6 +149,10 @@ class GeminiAdapter:
     ) -> T:
         if self.use_mock:
             logger.debug("GeminiAdapter mock: generate_structured(%s)", schema.__name__)
+            if schema.__name__ == "WatcherOutput":
+                return schema.model_validate(MOCK_WATCHER_OUTPUT_JSON)
+            if schema.__name__ == "StrategistOutput":
+                return schema.model_validate(MOCK_STRATEGIST_OUTPUT_JSON)
             return schema.model_validate(MOCK_WRITER_OUTPUT_JSON)
 
         from google.genai import types
@@ -134,11 +178,14 @@ class GeminiAdapter:
         parsed = getattr(response, "parsed", None)
         if parsed is not None:
             if isinstance(parsed, schema):
-                return parsed
-            try:
-                return schema.model_validate(parsed)
-            except ValidationError:
-                pass
+                result = parsed
+            else:
+                try:
+                    result = schema.model_validate(parsed)
+                except ValidationError:
+                    result = None
+            if result is not None:
+                return result
 
         text = (response.text or "").strip()
         if not text:
@@ -146,7 +193,29 @@ class GeminiAdapter:
         try:
             return schema.model_validate_json(text)
         except ValidationError:
-            return schema.model_validate(json.loads(text))
+            payload = json.loads(text)
+            if schema.__name__ == "WatcherOutput" and isinstance(payload, dict):
+                payload = self._normalize_watcher_payload(payload)
+            result = schema.model_validate(payload)
+        if schema.__name__ == "WatcherOutput" and hasattr(result, "claims"):
+            claims = getattr(result, "claims", None) or []
+            summary = getattr(result, "summary", "") or ""
+            if not claims and summary.strip():
+                logger.warning(
+                    "Gemini WatcherOutput parsed with empty claims (summary len=%d)",
+                    len(summary),
+                )
+        return result
+
+    @staticmethod
+    def _normalize_watcher_payload(payload: dict) -> dict:
+        """Vertex occasionally omits claims or uses null — keep a list for validation."""
+        claims = payload.get("claims")
+        if claims is None:
+            payload = {**payload, "claims": []}
+        elif not isinstance(claims, list):
+            payload = {**payload, "claims": []}
+        return payload
 
 
 @lru_cache

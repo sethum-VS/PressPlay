@@ -1,5 +1,5 @@
 {% set stage = job.stage.value if job.stage is not none else job.status.value %}
-{% set stages = ['queued', 'downloading', 'memvid', 'watching', 'writing', 'mapping', 'done'] %}
+{% set stages = ['queued', 'downloading', 'memvid', 'watching', 'strategizing', 'writing', 'editing', 'mapping', 'done'] %}
 {% set stage_idx = stages.index(stage) if stage in stages else 0 %}
 
 <div
@@ -46,7 +46,9 @@
       ('downloading', 'Downloading', 'timeline-thinking'),
       ('memvid', 'Memvid', 'timeline-grep'),
       ('watching', 'Watching', 'timeline-read'),
+      ('strategizing', 'Strategy', 'timeline-thinking'),
       ('writing', 'Writing', 'timeline-edit'),
+      ('editing', 'Editing', 'timeline-grep'),
       ('mapping', 'Mapping', 'timeline-done')
     ] %}
     {% set idx = stages.index(s) %}

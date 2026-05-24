@@ -235,17 +235,24 @@ class GraphifyService:
     """Run Graphify on blog markdown; normalize to D3 nodes/edges."""
 
     async def build_graph(self, blog_markdown: str) -> GraphData:
+        graph, _ = await self.build_graph_with_source(blog_markdown)
+        return graph
+
+    async def build_graph_with_source(
+        self, blog_markdown: str
+    ) -> tuple[GraphData, str]:
         if not blog_markdown.strip():
-            return _heuristic_graph_from_markdown(blog_markdown)
+            return _heuristic_graph_from_markdown(blog_markdown), "heuristic"
 
         if graphify_uses_heuristic():
-            return _heuristic_graph_from_markdown(blog_markdown)
+            return _heuristic_graph_from_markdown(blog_markdown), "heuristic"
 
         try:
-            return await asyncio.to_thread(self._build_graph_sync, blog_markdown)
+            graph = await asyncio.to_thread(self._build_graph_sync, blog_markdown)
+            return graph, "graphify"
         except Exception as exc:
             logger.warning("Graphify failed, using heuristic graph: %s", exc)
-            return _heuristic_graph_from_markdown(blog_markdown)
+            return _heuristic_graph_from_markdown(blog_markdown), "heuristic"
 
     def _build_graph_sync(self, blog_markdown: str) -> GraphData:
         with tempfile.TemporaryDirectory(prefix="pressplay-graphify-") as tmp:
@@ -254,3 +261,10 @@ class GraphifyService:
             graph_path = _run_graphify_extract(work)
             raw = json.loads(graph_path.read_text(encoding="utf-8"))
             return normalize_graphify_json(raw)
+
+
+def graph_source_for_build() -> str:
+    """Label used when pipeline skips graphify call entirely."""
+    if graphify_uses_heuristic():
+        return "heuristic"
+    return "graphify"

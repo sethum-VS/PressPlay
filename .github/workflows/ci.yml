@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pressplay
+          POSTGRES_PASSWORD: pressplay
+          POSTGRES_DB: pressplay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pressplay -d pressplay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://pressplay:pressplay@localhost:5432/pressplay
+          SESSION_SECRET: ci-test-secret
+          PRESSPLAY_USE_MOCK: "1"
+          MOCK_LLM: "true"
+        run: alembic upgrade head
+
+      - name: Pytest
+        env:
+          DATABASE_URL: postgresql+asyncpg://pressplay:pressplay@localhost:5432/pressplay
+          SESSION_SECRET: ci-test-secret
+          PRESSPLAY_USE_MOCK: "1"
+          MOCK_LLM: "true"
+        run: pytest -q

@@ -104,9 +104,21 @@ if command -v memvid >/dev/null 2>&1; then
   MEMVID_OK=1
 fi
 if [[ "$MEMVID_OK" -eq 0 ]]; then
-  warn "memvid CLI not found — ingest uses YouTube captions fallback only:"
-  warn "  npm install -g memvid-cli  OR  cargo install memvid-cli --features whisper"
-  warn "  pip install memvid-sdk"
+  if python -c "import memvid_sdk" 2>/dev/null; then
+    ok "memvid-sdk Python package installed (CLI may be: python -m memvid)"
+    MEMVID_OK=1
+  else
+    warn "memvid CLI not found — real ingest will fail until installed:"
+    warn "  pip install memvid-sdk"
+    warn "  memvid models install whisper-small"
+  fi
+fi
+if [[ "$MEMVID_OK" -eq 1 ]] && command -v memvid >/dev/null 2>&1; then
+  if ! memvid models list 2>/dev/null | grep -qi whisper; then
+    warn "Whisper model may be missing — run: memvid models install whisper-small"
+  else
+    ok "memvid whisper model appears installed"
+  fi
 fi
 
 GRAPHIFY_OK=0
@@ -160,6 +172,12 @@ if [[ "$MOCK_LLM_LC" == "true" || "$MOCK_LLM_LC" == "1" || "$MOCK_LLM_LC" == "ye
   warn "MOCK_LLM is enabled — Watcher/Writer use canned output (ingest may still run)"
 fi
 
+PP_MOCK_RAW="${PRESSPLAY_USE_MOCK:-}"
+PP_MOCK_LC="$(printf '%s' "$PP_MOCK_RAW" | tr '[:upper:]' '[:lower:]')"
+if [[ "$PP_MOCK_LC" == "1" || "$PP_MOCK_LC" == "true" || "$PP_MOCK_LC" == "yes" ]]; then
+  warn "PRESSPLAY_USE_MOCK is set — full fast mock (skips download/Memvid). Unset for real ingest."
+fi
+
 if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
   if [[ -f "${GOOGLE_APPLICATION_CREDENTIALS}" ]]; then
     ok "credentials: service account file (GOOGLE_APPLICATION_CREDENTIALS set)"
@@ -177,6 +195,36 @@ else
 fi
 
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:$PYTHONPATH}"
+
+# --- Postgres (MVP durable state) ---
+DB_URL="${DATABASE_URL:-}"
+if [[ -n "$DB_URL" ]]; then
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    if ! python -c "import asyncpg" 2>/dev/null; then
+      ok "asyncpg available via venv"
+    fi
+    info "Ensuring Postgres is up (docker compose)..."
+    docker compose up -d db 2>/dev/null || true
+    for _ in $(seq 1 30); do
+      if docker compose exec -T db pg_isready -U pressplay -d pressplay >/dev/null 2>&1; then
+        ok "Postgres is ready"
+        break
+      fi
+      sleep 1
+    done
+  fi
+  info "Running database migrations..."
+  if ! alembic upgrade head; then
+    die "alembic upgrade head failed — check DATABASE_URL and Postgres"
+  fi
+  ok "database migrations applied"
+else
+  warn "DATABASE_URL unset — in-memory jobs + filesystem results (not production-ready)"
+fi
+
+if [[ -z "${SESSION_SECRET:-}" ]]; then
+  warn "SESSION_SECRET unset — using dev-only cookie signing (set SESSION_SECRET for production)"
+fi
 
 if [[ "$VERIFY_LLM" -eq 1 ]]; then
   info "Running Vertex LLM smoke test..."

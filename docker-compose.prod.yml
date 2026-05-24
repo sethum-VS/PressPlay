@@ -1,0 +1,48 @@
+# Production compose for GCP VM (image from Artifact Registry).
+# Deploy workflow sets IMAGE and writes /opt/pressplay/.env on the VM.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pressplay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pressplay
+    volumes:
+      - pressplay_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pressplay -d pressplay"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  newsroom:
+    image: ${IMAGE}
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: data
+      DATABASE_URL: postgresql+asyncpg://pressplay:${POSTGRES_PASSWORD}@db:5432/pressplay
+      DEBUG: "false"
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID}
+      GCP_LOCATION: ${GCP_LOCATION:-us-central1}
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 45s
+
+volumes:
+  pressplay_pg:

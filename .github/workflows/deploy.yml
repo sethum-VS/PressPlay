@@ -1,0 +1,96 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-pressplay-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  GCP_AR_REPOSITORY: ${{ vars.GCP_AR_REPOSITORY || 'pressplay' }}
+  GCP_IMAGE_NAME: ${{ vars.GCP_IMAGE_NAME || 'newsroom' }}
+  GCP_CLOUD_RUN_SERVICE: ${{ vars.GCP_CLOUD_RUN_SERVICE || 'pressplay' }}
+  GCP_SQL_INSTANCE: ${{ vars.GCP_SQL_INSTANCE || 'pressplay-db' }}
+  WIF_PROVIDER: projects/1047596610069/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+  DEPLOYER_SA: github-actions-deployer@project-3bb9c91c-69ed-4507-998.iam.gserviceaccount.com
+
+jobs:
+  deploy:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        env:
+          IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_AR_REPOSITORY }}/${{ env.GCP_IMAGE_NAME }}
+        run: |
+          TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
+          docker buildx build --platform linux/amd64 --push \
+            -t "${IMAGE_URI}:${TAG}" -t "${IMAGE_URI}:latest" .
+          echo "IMAGE_URI=${IMAGE_URI}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=${TAG}" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        env:
+          IMAGE_URI: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GCP_AR_REPOSITORY }}/${{ env.GCP_IMAGE_NAME }}
+          CLOUDSQL_CONNECTION: ${{ env.GCP_PROJECT_ID }}:${{ env.GCP_REGION }}:${{ env.GCP_SQL_INSTANCE }}
+        run: |
+          gcloud run deploy "${GCP_CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${IMAGE_URI}:${IMAGE_TAG}" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --service-account="pressplay-runtime@${GCP_PROJECT_ID}.iam.gserviceaccount.com" \
+            --add-cloudsql-instances="${CLOUDSQL_CONNECTION}" \
+            --min-instances=0 \
+            --max-instances=3 \
+            --cpu=2 \
+            --memory=4Gi \
+            --timeout=3600 \
+            --port=8000 \
+            --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest,PRESSPLAY_DEMO_SECRET=pressplay-demo-secret:latest" \
+            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},DEBUG=false" \
+            --command="sh" \
+            --args="-c,alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000" \
+            --quiet
+
+      - name: Print public HTTPS URL
+        run: |
+          URL="$(gcloud run services describe "${GCP_CLOUD_RUN_SERVICE}" \
+            --region="${GCP_REGION}" \
+            --project="${GCP_PROJECT_ID}" \
+            --format='value(status.url)')"
+          echo "PressPlay (HTTPS): ${URL}"
+          echo "Health: ${URL}/health/ready"
+          echo "Demo gate: set PRESSPLAY_DEMO_SECRET in Secret Manager (pressplay-demo-secret)"

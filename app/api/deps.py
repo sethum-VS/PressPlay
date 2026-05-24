@@ -1,4 +1,5 @@
 import time
+import uuid
 from collections import defaultdict, deque
 
 from fastapi import Header, Request
@@ -43,6 +44,33 @@ def get_rate_limiter(settings: Settings | None = None) -> RateLimiter:
     return _rate_limiter
 
 
+async def check_rate_limit(request: Request, settings: Settings | None = None) -> None:
+    """Apply DB or in-memory rate limiting."""
+    s = settings or get_settings()
+    ip = get_client_ip(request)
+    guest_id = None
+    guest = getattr(request.state, "guest", None)
+    if guest is not None:
+        guest_id = guest.id
+
+    if s.use_database:
+        from app.services.rate_limit_db import get_db_rate_limiter
+
+        await get_db_rate_limiter(s).check(guest_id, ip)
+    else:
+        key = f"{guest_id or 'anon'}:{ip}"
+        get_rate_limiter(s).check(key)
+
+
+async def get_active_job_count() -> int:
+    from app.repositories.factory import get_job_store
+
+    store = get_job_store()
+    if hasattr(store, "active_count_async"):
+        return await store.active_count_async()
+    return store.active_count()
+
+
 def verify_demo_secret(
     secret: str | None,
     header_secret: str | None = Header(default=None, alias="X-PressPlay-Secret"),
@@ -57,9 +85,10 @@ def verify_demo_secret(
         raise AuthError("Invalid or missing demo secret.")
 
 
-def check_concurrent_cap(active_count: int, settings: Settings | None = None) -> None:
+async def check_concurrent_cap(settings: Settings | None = None) -> None:
     s = settings or get_settings()
-    if active_count >= s.max_concurrent_jobs:
+    active = await get_active_job_count()
+    if active >= s.max_concurrent_jobs:
         raise ConcurrentJobsError(
             f"Server is busy ({s.max_concurrent_jobs} jobs running). Please try again shortly."
         )

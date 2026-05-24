@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     graphify_bin: str = ""
     pressplay_use_mock: str = ""
 
+    # Postgres + guest sessions
+    database_url: str = ""
+    session_secret: str = ""
+    guest_session_ttl_days: int = 30
+
     @property
     def project_root(self) -> Path:
         return Path(__file__).resolve().parent.parent
@@ -81,6 +86,14 @@ class Settings(BaseSettings):
         if self.mock_llm:
             return True
         return not self.effective_gcp_project
+
+    @property
+    def use_database(self) -> bool:
+        return bool(self.database_url.strip())
+
+    @property
+    def session_cookie_secure(self) -> bool:
+        return not self.debug
 
     def gcp_credential_warnings(self) -> list[str]:
         """Non-fatal misconfig hints (e.g. Docker mount missing)."""

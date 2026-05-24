@@ -40,6 +40,7 @@ class MemvidService:
         )
 
     async def extract_context(self, video: VideoDownloadResult) -> str:
+        self.verify_cli_available()
         return await asyncio.to_thread(self._extract_sync, video)
 
     def _extract_sync(self, video: VideoDownloadResult) -> str:
@@ -85,8 +86,15 @@ class MemvidService:
             path = Path(candidate) if isinstance(candidate, Path) else Path(str(candidate))
             if path.is_file():
                 return [str(path)]
-        # memvid-sdk does not ship the video ingest CLI; avoid `python -m memvid` (wrong PyPI package).
         raise MemvidError(self._install_hint())
+
+    def verify_cli_available(self) -> None:
+        """Fail fast before download when Memvid CLI is required."""
+        self._memvid_cmd()
+        try:
+            import memvid_sdk  # noqa: F401
+        except ImportError as exc:
+            raise MemvidError(self._install_hint()) from exc
 
     def _ensure_memory_file(self, mv2_path: Path) -> None:
         if mv2_path.is_file():
@@ -200,7 +208,33 @@ class MemvidService:
         return len(unified) < 400
 
     @staticmethod
-    def _format_timeline(timeline: object) -> list[str]:
+    def _timestamp_to_seconds(value: object) -> float | None:
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if not s:
+            return None
+        if s.endswith("s") and s[:-1].replace(".", "", 1).isdigit():
+            return float(s[:-1])
+        if ":" in s:
+            parts = s.split(":")
+            try:
+                nums = [float(p) for p in parts]
+            except ValueError:
+                return None
+            if len(nums) == 2:
+                return nums[0] * 60 + nums[1]
+            if len(nums) == 3:
+                return nums[0] * 3600 + nums[1] * 60 + nums[2]
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _format_timeline(cls, timeline: object) -> list[str]:
         lines: list[str] = []
         entries = timeline if isinstance(timeline, list) else []
         for entry in entries:
@@ -215,8 +249,26 @@ class MemvidService:
             if not text:
                 continue
             meta = entry.get("metadata") or {}
-            ts = entry.get("timestamp") or meta.get("timestamp") or meta.get("segment_start")
-            prefix = f"[{ts}] " if ts else ""
+            if not isinstance(meta, dict):
+                meta = {}
+            ts_raw = (
+                entry.get("timestamp")
+                or entry.get("start_sec")
+                or entry.get("start")
+                or meta.get("timestamp")
+                or meta.get("segment_start")
+                or meta.get("start_sec")
+                or meta.get("start")
+            )
+            sec = cls._timestamp_to_seconds(ts_raw)
+            if sec is None and entry.get("end_sec") is not None:
+                sec = cls._timestamp_to_seconds(entry.get("end_sec"))
+            if sec is not None:
+                prefix = f"[{int(sec)}s] "
+            elif ts_raw:
+                prefix = f"[{ts_raw}] "
+            else:
+                prefix = ""
             lines.append(f"{prefix}{str(text).strip()}")
         return lines
 

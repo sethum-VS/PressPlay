@@ -1,0 +1,36 @@
+# PressPlay brand voice (legacy single-file override)
+#
+# Multi-vertical jobs use packs under config/ (no copy step required):
+#   brand-sports.yaml  — post-game / league (vertical=sports)
+#   brand-events.yaml  — general events (vertical=events, default)
+#   brand-corp.yaml    — internal comms (vertical=corp)
+#
+# Optional: copy this file → config/brand.yaml or repo-root brand.yaml to override
+# all verticals when no vertical-specific pack is found (unusual).
+# Injected into the Writer agent system prompt only.
+
+name: "Example Sports League"
+
+tone: >-
+  Confident, energetic, fan-forward. Short sentences. Present tense for live action;
+  past tense for final scores. Neutral on officiating unless quoting on-record statements.
+
+voice: >-
+  Official league voice — authoritative but accessible. Prefer team names over nicknames
+  in headlines; OK nicknames in tweets.
+
+banned_phrases:
+  - "game-changing"
+  - "literally"
+  - "you won't believe"
+  - "slammed"
+  - "destroyed"  # unless quoting stats context
+
+hashtag_policy: >-
+  Max 2 hashtags per tweet; always include official league tag when provided by comms.
+
+max_tweet_chars: 280
+
+# Optional notes for humans (not sent to the model)
+notes: |
+  Post-game pilot: enable Quick mode 10–15 min window on highlight packages.

@@ -3,7 +3,13 @@ import uuid
 from typing import Callable
 
 from app.domain.errors import JobNotFoundError
-from app.domain.models import JobRecord, JobStatus, ProcessingMode, STAGE_PROGRESS
+from app.domain.models import (
+    BrandVertical,
+    JobRecord,
+    JobStatus,
+    ProcessingMode,
+    STAGE_PROGRESS,
+)
 
 
 class JobStore:
@@ -16,6 +22,8 @@ class JobStore:
         youtube_url: str,
         mode: ProcessingMode,
         quick_minutes: int | None = None,
+        webhook_url: str | None = None,
+        vertical: BrandVertical = BrandVertical.EVENTS,
     ) -> JobRecord:
         job_id = str(uuid.uuid4())
         job = JobRecord(
@@ -26,6 +34,8 @@ class JobStore:
             mode=mode,
             youtube_url=youtube_url,
             quick_minutes=quick_minutes,
+            webhook_url=webhook_url,
+            vertical=vertical,
         )
         async with self._lock:
             self._jobs[job_id] = job
@@ -78,7 +88,9 @@ class JobStore:
             JobStatus.DOWNLOADING,
             JobStatus.MEMVID,
             JobStatus.WATCHING,
+            JobStatus.STRATEGIZING,
             JobStatus.WRITING,
+            JobStatus.EDITING,
             JobStatus.MAPPING,
         }
         return sum(1 for j in self._jobs.values() if j.status in active)

@@ -1,24 +1,21 @@
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
-from app.api.deps import (
-    check_concurrent_cap,
-    get_client_ip,
-    get_rate_limiter,
-    verify_demo_secret,
+
+from app.api.deps import check_concurrent_cap, check_rate_limit, verify_demo_secret
+from app.api.deps_guest import get_guest_id
+from app.api.job_creation import (
+    create_pressplay_job,
+    parse_brand_vertical,
+    parse_processing_mode,
 )
 from app.config import get_settings
 from app.domain.errors import (
-    AuthError,
-    ConcurrentJobsError,
     JobNotFoundError,
     PressPlayError,
     RateLimitError,
-    ValidationError,
 )
-from app.domain.models import JobStatus, ProcessingMode
-from app.services.job_store import get_job_store
-from app.services.pipeline import schedule_pipeline
-from app.services.youtube import YouTubeService
+from app.domain.models import JobStatus
+from app.repositories.factory import get_job_store
 
 router = APIRouter(prefix="/api", tags=["jobs"])
 
@@ -35,31 +32,26 @@ async def create_job(
     youtube_url: str = Form(...),
     mode: str = Form("quick"),
     quick_minutes: int | None = Form(None),
+    vertical: str = Form("events"),
     secret: str | None = Form(None),
 ):
     settings = get_settings()
-    store = get_job_store()
-    yt = YouTubeService()
 
     try:
         verify_demo_secret(secret)
-        get_rate_limiter(settings).check(get_client_ip(request))
-        check_concurrent_cap(store.active_count(), settings)
+        await check_rate_limit(request, settings)
+        await check_concurrent_cap(settings)
 
-        url = yt.validate_url(youtube_url)
-        proc_mode = ProcessingMode(mode.lower())
-        if proc_mode not in (ProcessingMode.QUICK, ProcessingMode.FULL):
-            raise ValidationError("Mode must be 'quick' or 'full'.")
-
-        qm: int | None = None
-        if proc_mode == ProcessingMode.QUICK:
-            qm = quick_minutes or settings.quick_minutes_default
-            qm = yt.enforce_quick_window(
-                qm, settings.quick_minutes_min, settings.quick_minutes_max
-            )
-
-        job = await store.create(url, proc_mode, qm)
-        schedule_pipeline(job.id)
+        proc_mode = parse_processing_mode(mode)
+        brand_vertical = parse_brand_vertical(vertical)
+        job = await create_pressplay_job(
+            youtube_url=youtube_url,
+            mode=proc_mode,
+            quick_minutes=quick_minutes,
+            settings=settings,
+            guest_session_id=get_guest_id(request),
+            vertical=brand_vertical,
+        )
 
         return _templates(request).TemplateResponse(
             request,
@@ -78,8 +70,9 @@ async def create_job(
 @router.get("/jobs/{job_id}", response_class=HTMLResponse)
 async def poll_job(request: Request, job_id: str):
     store = get_job_store()
+    guest_id = get_guest_id(request)
     try:
-        job = await store.get(job_id)
+        job = await store.get_for_guest(job_id, guest_id)
     except JobNotFoundError:
         return _templates(request).TemplateResponse(
             request,

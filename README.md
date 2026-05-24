@@ -1,23 +1,38 @@
 # PressPlay
 
-**The multimodal newsroom for event video.** Turn a YouTube link into a publish-ready press kit—blog post, social thread, and knowledge graph—in minutes, not hours.
+**Press kit factory + governance for event video.** Turn a YouTube link into an auditable press kit—blog post, social thread, timestamped citations, and knowledge graph—that comms teams can review, edit, and publish on your cloud.
 
-PressPlay is an AI-native content pipeline built for communications teams, creators, and newsrooms who need to move from raw footage to multi-format storytelling without a room full of editors. Point it at a launch, keynote, or highlight reel; get structured copy and an explorable entity graph you can share, refine, and ship.
+PressPlay is **not** a generic “paste YouTube into ChatGPT” summarizer. It is a fixed pipeline with separated fact extraction (Watcher) and copywriting (Writer), shareable `/newsroom/{id}` artifacts, editorial workflow, and optional API/webhook integrations for B2B comms teams.
 
 > [!TIP]
-> **New here?** Run `./run.sh --verify-llm` after setting `GCP_PROJECT_ID` in `.env` to confirm Vertex is wired, then open [http://localhost:8000](http://localhost:8000) and submit a YouTube URL in **Quick** mode.
+> **New here?** Run `./run.sh --verify-llm` after setting `GCP_PROJECT_ID` in `.env`, then open [http://localhost:8000](http://localhost:8000) and submit a YouTube URL in **Quick** mode.
 
 ---
 
 ## Why PressPlay?
 
-Modern events are captured on video first—but distribution still demands blogs, threads, and context-rich visuals. PressPlay closes that gap with a single, repeatable workflow:
+| Chat tab | PressPlay |
+|----------|-----------|
+| Ad-hoc prompts, ephemeral thread | Guaranteed blog + 3 tweets + graph every run |
+| Hard to audit | Timestamped **claims** with jump-to-moment links |
+| No approval flow | Workflow: draft → in_review → approved → published |
+| Consumer SaaS governance | Vertex on **your** GCP project, rate limits, demo secret |
 
-- **Speed to publish** — Quick mode targets a full press kit in ~60 seconds after ingest for typical 5–20 minute clips; Full mode handles longer source material (up to one hour).
-- **Multimodal fidelity** — Local [Memvid](https://github.com/memvid/memvid) ingest fuses transcript and visual context before any LLM writes a word, so summaries reflect what was said *and* shown.
-- **Editorial outputs, not raw JSON** — A polished Markdown article, a three-part Twitter thread, and a D3 knowledge graph—ready for `/newsroom/{id}` sharing.
-- **Production-minded defaults** — Async jobs with HTMX polling, rate limits, optional demo secret, GCP Vertex via `google-genai`, and Docker-ready deployment.
-- **Demo-safe fallbacks** — Mock only the LLM when you need a reliable stage demo; or skip ingest entirely for fast UI walkthroughs.
+- **Trust** — Watcher emits atomic claims with `[seconds]` anchors from Memvid transcript/visual context.
+- **Speed to ship** — Structured outputs (Pydantic), CMS-ready Markdown, Slack/JSON export.
+- **Editorial control** — Edit blog/tweets on the newsroom page; partial regen (tweets/graph/blog) without re-ingest.
+- **Integrations** — `POST /api/v1/jobs` with optional `webhook_url`; export markdown/json/slack.
+
+---
+
+## Go-to-market (wedge)
+
+**Positioning:** Sell as *automated, auditable press kit factory* for **event-driven comms** (sports post-game, launches, IR keynotes)—not “AI watches YouTube.”
+
+**First pilot:** See [docs/PILOT_SPORTS.md](./docs/PILOT_SPORTS.md) for a sports post-game checklist and metrics vs a ChatGPT baseline (time-to-publish, citation coverage, editor edits).
+
+**Do say:** “Separated fact extraction and copywriting, with shareable results and your cloud.”  
+**Do not say:** “AI summarizes YouTube” or “~60 seconds” unless Memvid + Vertex are proven on your hardware.
 
 ---
 
@@ -25,31 +40,44 @@ Modern events are captured on video first—but distribution still demands blogs
 
 ```text
 YouTube URL  →  yt-dlp + ffmpeg  →  Memvid (transcript + visuals)
-       →  Watcher (journalist analysis)  →  Writer (blog + thread)
-       →  Graphify (entities)  →  /newsroom/{id}
+       →  Watcher (facts + claims)  →  Writer (blog + thread)
+       →  Graphify (entities)  →  /newsroom/{id}  (draft by default)
 ```
 
 | Stage | Role |
 |-------|------|
 | **Ingest** | Download and trim video (Quick: 5–20 min window; Full: ≤1 h) |
 | **Memvid** | Build `unified_context` from speech and frames |
-| **Watcher** | Gemini 2.5 Flash on Vertex — narrative and fact extraction |
-| **Writer** | Structured press kit (Pydantic-validated blog + 3 tweets) |
-| **Graphify** | Semantic entity graph (`graphify extract`) with heuristic fallback |
-| **Newsroom** | Shareable page: article, thread, interactive D3 graph |
+| **Watcher** | Gemini — chronological summary + timestamped claims |
+| **Writer** | Structured press kit (blog + 3 tweets; optional `claim_refs`) |
+| **Graphify** | Semantic entity graph with heuristic fallback |
+| **Newsroom** | Citations, edit forms, workflow status, export links |
 
-Orchestration is a thin Python pipeline (CrewAI-*style* two-agent design, no CrewAI runtime dependency). See **[Project Specification.md](./Project%20Specification.md)** for architecture, API contracts, and locked design decisions.
+See **[Project Specification.md](./Project%20Specification.md)** for architecture and locked decisions.
 
 ---
 
-## Features
+## One-command ingest setup
 
-- **YouTube-first workflow** — URL validation, Quick/Full modes, server-enforced trim windows
-- **HTMX + Jinja UI** — No frontend build step; Tailwind CDN; polling job progress with stage labels
-- **Vertex / Agent Platform** — `google-genai` with `vertexai=True`; Application Default Credentials locally, service account in Docker
-- **Persisted press kits** — `data/results/{id}/` with manifest, markdown, tweets, and graph JSON
-- **Operational guardrails** — ~5 jobs/hour/IP, max 2 concurrent jobs, optional `PRESSPLAY_DEMO_SECRET`
-- **Local dev ergonomics** — `run.sh` dependency checks, `scripts/verify_gcp.py` LLM smoke test, `docker compose` for prod-like runs
+Real ingest is the **default** when `GCP_PROJECT_ID` is set and `PRESSPLAY_USE_MOCK` is **unset**.
+
+```bash
+# 1. System tools
+brew install ffmpeg          # or: apt install ffmpeg
+pip install -r requirements.txt
+pip install memvid-sdk
+
+# 2. Memvid CLI with Whisper (recommended — not optional for caption-less videos)
+cargo install memvid-cli --features whisper
+
+# 3. Whisper model (or use ./run.sh with PRESSPLAY_INSTALL_WHISPER=1)
+memvid models install whisper-small
+
+# 4. Verify
+./run.sh --skip-server
+```
+
+If the Memvid CLI is missing, the pipeline **fails fast** with install instructions (YouTube auto-captions may still work as fallback). Docker installs `memvid-sdk` and attempts `memvid models install whisper-small`; mount or bake the `memvid` binary for full multimodal ingest in containers.
 
 ---
 
@@ -62,7 +90,7 @@ Orchestration is a thin Python pipeline (CrewAI-*style* two-agent design, no Cre
 - [gcloud](https://cloud.google.com/sdk) CLI (for local Vertex ADC)
 - GCP project with **Vertex AI API** enabled
 
-### Install and run (recommended)
+### Install and run
 
 ```bash
 git clone https://github.com/sethum-VS/PressPlay.git
@@ -71,26 +99,33 @@ cp .env.example .env
 # Set GCP_PROJECT_ID and GCP_LOCATION in .env
 
 gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
-
 chmod +x run.sh
-./run.sh --verify-llm   # optional: confirm Vertex responds
-./run.sh                # start API at http://localhost:8000
+./run.sh --verify-llm
+./run.sh
 ```
 
-Submit a **YouTube URL** on the homepage → wait for job completion → open **`/newsroom/{id}`**.
+Submit a **YouTube URL** → open **`/newsroom/{id}`** when the job completes.
 
-### Docker (prod-like)
+### Docker (Postgres + guest sessions)
 
 ```bash
 cp .env.example .env
+# Required for production-shaped deploy:
+echo "SESSION_SECRET=$(openssl rand -hex 32)" >> .env
 mkdir -p secrets
-# Place service account JSON at secrets/gcp-sa.json (gitignored)
+# Place service account JSON at secrets/gcp-sa.json
 
 docker compose up --build
 ```
 
-Compose mounts the SA at `/secrets/gcp.json` and sets `GOOGLE_APPLICATION_CREDENTIALS`—mirroring the GCP VM path in the spec.
+`docker compose` starts **Postgres 16** and the API, runs **Alembic migrations**, and issues a **guest session cookie** on first visit (30-day TTL by default). Jobs and press kits persist across restarts; each guest only sees their own work.
+
+Smoke test (API running):
+
+```bash
+chmod +x scripts/smoke_mvp.sh
+./scripts/smoke_mvp.sh http://localhost:8000
+```
 
 ---
 
@@ -100,27 +135,16 @@ Compose mounts the SA at `/secrets/gcp.json` and sets `GOOGLE_APPLICATION_CREDEN
 |----------|---------|
 | `GCP_PROJECT_ID` | Vertex project (required for live LLM) |
 | `GCP_LOCATION` | Vertex region (e.g. `us-central1`) |
-| `MOCK_LLM=true` | Real ingest; stub Watcher/Writer and heuristic graph |
-| `PRESSPLAY_USE_MOCK=1` | Full fast mock — skips download/Memvid |
+| `MOCK_LLM=true` | Real ingest; stub Watcher/Writer |
+| `PRESSPLAY_USE_MOCK=1` | **UI-only** fast mock — skips download/Memvid (not default) |
 | `PRESSPLAY_DEMO_SECRET` | Optional gate for public demos |
+| `PRESSPLAY_INSTALL_WHISPER=1` | `./run.sh` runs `memvid models install whisper-small` |
 | `GRAPHIFY_BIN` | Override path to `graphify` CLI |
+| `DATABASE_URL` | Postgres async URL (required for MVP deploy) |
+| `SESSION_SECRET` | Cookie signing secret (required in Docker compose) |
+| `GUEST_SESSION_TTL_DAYS` | Guest session lifetime (default `30`) |
 
-**Auth (Pattern C):** Local dev uses ADC only—leave `GOOGLE_APPLICATION_CREDENTIALS` unset. Docker uses a mounted service account JSON.
-
-Full matrix: [Project Specification.md §10](./Project%20Specification.md).
-
----
-
-## PressPlay stack
-
-| Layer | Technology |
-|-------|------------|
-| API & UI | FastAPI, Jinja2, HTMX, Tailwind CDN |
-| Video | yt-dlp, ffmpeg |
-| Multimodal context | Memvid CLI / SDK (Whisper + visual search) |
-| LLM | Gemini 2.5 Flash via `google-genai` → Vertex |
-| Knowledge graph | Graphify (`graphifyy` package, `graphify` CLI) + D3.js |
-| Hosting | GCP Compute + Docker (see spec §12) |
+**Brand voice (vertical packs):** Each job selects a vertical at create time (`sports`, `events`, `corp`; default `events`). PressPlay loads `config/brand-{vertical}.yaml` into the Writer prompt only. Customize tone, voice, banned phrases, and hashtag policy in those files. Legacy override: copy `config/brand.yaml.example` → `config/brand.yaml` (used only when a vertical pack file is missing).
 
 ---
 
@@ -130,35 +154,26 @@ Full matrix: [Project Specification.md §10](./Project%20Specification.md).
 |--------|------|-------------|
 | `GET` | `/` | Homepage — submit jobs, list past runs |
 | `POST` | `/api/jobs` | Create async job (HTMX) |
-| `GET` | `/api/jobs/{id}` | Poll status (~2s) |
+| `GET` | `/api/jobs/{id}` | Poll status (HTMX) |
+| `POST` | `/api/v1/jobs` | Create job (JSON) — `{id, status, poll_url}` |
+| `GET` | `/api/v1/jobs/{id}` | Job status JSON |
+| `GET` | `/api/v1/newsroom/{id}/export?format=` | `markdown` \| `json` \| `slack` |
+| `POST` | `/api/jobs/{id}/regenerate` | Partial regen: `part=tweets\|blog\|graph` |
+| `POST` | `/newsroom/{id}/save` | Save blog + tweets edits |
+| `POST` | `/newsroom/{id}/workflow` | Update workflow status |
 | `GET` | `/newsroom/{id}` | Shareable press kit |
 | `GET` | `/health` | Liveness |
+| `GET` | `/health/ready` | Readiness (Postgres `SELECT 1`) |
 
----
+**JSON job create example:**
 
-## Repository layout
-
-```text
-app/
-  adapters/gemini.py      # Vertex client
-  services/pipeline.py    # Orchestration
-  services/agents/        # Watcher, Writer
-  templates/              # Jinja + HTMX
-  static/js/graph.js      # D3 visualization
-run.sh                    # Local checks + server
-scripts/
-  verify_gcp.py           # Vertex smoke test
-  cleanup_ttl.py          # Artifact TTL cleanup
-data/results/{id}/        # Persisted press kits
-Project Specification.md  # Architecture & decisions
+```bash
+curl -s -X POST http://localhost:8000/api/v1/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"youtube_url":"https://www.youtube.com/watch?v=VIDEO_ID","mode":"quick","vertical":"sports","webhook_url":"https://example.com/hook"}'
 ```
 
----
-
-## Documentation
-
-- **[Project Specification.md](./Project%20Specification.md)** — Vision, locked decisions, API surface, GCP deployment, mock modes, and implementation status
-- **[`.env.example`](./.env.example)** — Environment template
+`vertical` (or HTMX form field `vertical`): `sports` | `events` | `corp`. Poll responses include `"vertical"` on `GET /api/v1/jobs/{id}`; saved press kits store it on `manifest.json`.
 
 ---
 
@@ -166,30 +181,12 @@ Project Specification.md  # Architecture & decisions
 
 | Mode | When to use |
 |------|-------------|
-| **Live** | `GCP_PROJECT_ID` set, ADC or SA, Memvid + ffmpeg installed |
-| **`MOCK_LLM=true`** | Judge demos: real video ingest, stub LLM/graph |
+| **Live** | `GCP_PROJECT_ID` set, Memvid CLI + ffmpeg, `PRESSPLAY_USE_MOCK` unset |
+| **`MOCK_LLM=true`** | Demo with real ingest, stub LLM |
 | **`PRESSPLAY_USE_MOCK=1`** | Fast UI-only (~2s), no download |
-
-Install Memvid for full ingest:
-
-```bash
-pip install -r requirements.txt
-pip install memvid-sdk
-memvid models install whisper-small
-```
-
-Optional: `pip install graphifyy` and set `GEMINI_API_KEY` for semantic Graphify extraction (Vertex SA alone may not satisfy the Graphify CLI).
-
----
-
-## Roadmap
-
-- [ ] GCP VM deploy with HTTPS and TTL cron
-- [ ] Graphify auth parity with Vertex service accounts
-- [ ] Homepage analytics and source management (nav placeholders today)
 
 ---
 
 ## License
 
-See repository license file when published. Hackathon / demo use—confirm terms before production deployment.
+See repository license file when published.
