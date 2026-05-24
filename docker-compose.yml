@@ -1,0 +1,16 @@
+services:
+  newsroom:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      # Pattern C: mount GCP service account JSON (create secrets/gcp-sa.json locally)
+      - ./secrets/gcp-sa.json:/secrets/gcp.json:ro
+    env_file:
+      - .env
+    environment:
+      DATA_DIR: data
+      GOOGLE_APPLICATION_CREDENTIALS: /secrets/gcp.json
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-${VERTEX_PROJECT}}
+      GCP_LOCATION: ${GCP_LOCATION:-${VERTEX_LOCATION:-us-central1}}

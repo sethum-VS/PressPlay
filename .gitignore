@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+data/jobs/*
+data/results/*
+!data/jobs/.gitkeep
+!data/results/.gitkeep
+secrets/
+*.json
+!app/static/**/*.json
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/

@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+
+{% block title %}{{ result.title }} — PressPlay Newsroom{% endblock %}
+
+{% block content %}
+<header class="flex flex-col gap-sm border-b border-hairline pb-md">
+  <a href="/" class="font-caption text-caption text-primary hover:text-primary-active flex items-center gap-1 w-fit">
+    <span class="material-symbols-outlined text-[16px]">arrow_back</span> Dashboard
+  </a>
+  <h1 class="font-display-md text-display-md text-ink">{{ result.title }}</h1>
+  <p class="font-caption text-caption text-muted">
+    {{ result.mode.value }} mode · <a href="{{ result.youtube_url }}" class="text-primary hover:underline" target="_blank" rel="noopener">Source video</a>
+  </p>
+</header>
+
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-lg w-full">
+  <div class="lg:col-span-8 flex flex-col gap-md">
+    <div class="flex items-center justify-between border-b border-hairline pb-xs">
+      <h2 class="font-display-sm text-display-sm text-ink">The Blog Post</h2>
+      <a href="/newsroom/{{ result.id }}" class="flex items-center gap-1 font-button text-button text-canvas bg-ink rounded px-3 py-1 hover:bg-secondary transition-colors">
+        <span class="material-symbols-outlined text-[16px]">link</span> Share
+      </a>
+    </div>
+    <article class="bg-surface-card border border-hairline p-lg rounded-xl prose prose-slate max-w-none prose-headings:font-display-sm prose-p:font-body-md prose-p:text-body prose-a:text-primary hover:prose-a:text-primary-active">
+      {{ blog_html | safe }}
+      <div class="mt-8 pt-4 border-t border-hairline flex items-center justify-between not-prose">
+        <span class="bg-timeline-done text-on-surface font-caption-uppercase text-caption-uppercase px-[10px] py-[4px] rounded-full border border-hairline-strong shadow-sm">Final Draft</span>
+        <span class="font-code text-code text-muted">{{ pipeline_label }}</span>
+      </div>
+    </article>
+  </div>
+
+  <div class="lg:col-span-4 flex flex-col gap-xl">
+    <div class="flex flex-col gap-md">
+      <div class="flex items-center justify-between border-b border-hairline pb-xs">
+        <h2 class="font-title-md text-title-md text-ink">The Twitter Thread</h2>
+        <div class="flex items-center gap-2">
+          <button type="button" onclick="copyTweets()" class="font-button text-button text-primary hover:text-primary-active transition-colors flex items-center gap-1">
+            <span class="material-symbols-outlined text-[16px]">content_copy</span> Copy All
+          </button>
+          <span id="copy-status" class="font-caption text-caption text-success hidden" role="status"></span>
+        </div>
+      </div>
+      <div class="flex flex-col gap-sm" id="tweet-thread">
+        {% set icons = ['rocket', 'satellite_alt', 'flight_land'] %}
+        {% for tweet in result.tweets %}
+        <div class="bg-surface-card border border-hairline p-md rounded-lg flex flex-col gap-3 relative">
+          {% if not loop.last %}
+          <div class="absolute left-6 top-14 bottom-[-16px] w-[2px] bg-hairline-strong z-0"></div>
+          {% endif %}
+          <div class="flex items-center gap-3 relative z-10 bg-surface-card">
+            <div class="w-10 h-10 rounded-full bg-surface-variant flex items-center justify-center border border-hairline-strong">
+              <span class="material-symbols-outlined text-secondary">{{ icons[loop.index0 % 3] }}</span>
+            </div>
+            <div>
+              <p class="font-title-sm text-title-sm text-ink leading-tight">PressPlay</p>
+              <p class="font-caption text-caption text-muted leading-tight">@pressplay_ai</p>
+            </div>
+          </div>
+          <p class="font-body-sm text-body-sm text-ink pl-[52px] relative z-10 tweet-text">{{ tweet }}</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="flex flex-col gap-md">
+      <div class="flex items-center justify-between border-b border-hairline pb-xs">
+        <h2 class="font-title-md text-title-md text-ink">Entity Graph</h2>
+        <span class="font-code text-code text-muted">{{ result.graph.nodes | length }} entities</span>
+      </div>
+      <div id="graph-container" class="h-64 bg-canvas-soft border border-hairline rounded-lg relative overflow-hidden">
+        <div class="absolute inset-0 opacity-20 pointer-events-none" style="background-image: radial-gradient(#a09c92 1px, transparent 1px); background-size: 16px 16px;"></div>
+        <svg id="graph-svg" class="w-full h-full relative z-10"></svg>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block head %}
+<script src="https://d3js.org/d3.v7.min.js"></script>
+{% endblock %}
+
+{% block scripts %}
+<script type="application/json" id="graph-data">{{ graph_json | safe }}</script>
+<script src="/static/js/graph.js"></script>
+<script>
+  async function copyTweets() {
+    const texts = [...document.querySelectorAll('.tweet-text')].map((el) => el.textContent.trim());
+    const payload = texts.join('\n\n');
+    const status = document.getElementById('copy-status');
+
+    try {
+      if (navigator.clipboard?.writeText && window.isSecureContext) {
+        await navigator.clipboard.writeText(payload);
+      } else {
+        const ta = document.createElement('textarea');
+        ta.value = payload;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        if (!document.execCommand('copy')) throw new Error('copy failed');
+        document.body.removeChild(ta);
+      }
+      if (status) {
+        status.textContent = 'Copied!';
+        status.classList.remove('hidden', 'text-error');
+        status.classList.add('text-success');
+        setTimeout(() => status.classList.add('hidden'), 2000);
+      }
+    } catch (e) {
+      console.error('Copy failed', e);
+      if (status) {
+        status.textContent = 'Copy failed';
+        status.classList.remove('hidden', 'text-success');
+        status.classList.add('text-error');
+      }
+    }
+  }
+</script>
+{% endblock %}

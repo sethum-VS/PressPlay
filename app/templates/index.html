@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+
+{% block content %}
+<header class="text-center max-w-2xl mx-auto flex flex-col gap-sm">
+  <h1 class="font-display-lg text-display-lg text-ink">PressPlay</h1>
+  <p class="font-body-tracked text-body-tracked text-body">
+    Turn a YouTube event into a full press kit — blog, Twitter thread, and knowledge graph.
+    <span class="block mt-1 text-muted font-body-sm text-body-sm">Quick mode: ~60 seconds after ingest · Full mode: up to an hour</span>
+  </p>
+</header>
+
+<section class="w-full max-w-3xl mx-auto">
+  <form
+    class="bg-surface-card border border-hairline rounded-xl p-xl flex flex-col gap-lg"
+    hx-post="/api/jobs"
+    hx-target="#job-area"
+    hx-swap="innerHTML"
+    hx-indicator="#loading-state"
+  >
+    <div class="w-full flex flex-col gap-sm">
+      <label class="font-title-sm text-title-sm text-ink" for="youtube_url">YouTube video URL</label>
+      <div class="relative flex items-center">
+        <div class="absolute left-3 flex items-center pointer-events-none text-[#FF0000]">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"></path>
+          </svg>
+        </div>
+        <input
+          id="youtube_url"
+          name="youtube_url"
+          type="url"
+          required
+          placeholder="https://www.youtube.com/watch?v=..."
+          class="w-full bg-surface-card border border-hairline-strong rounded-lg py-3 pl-10 pr-4 font-body-md text-ink placeholder:text-muted focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+        >
+      </div>
+      <p class="font-caption text-caption text-muted">YouTube only in v1 — no playlists or MP4 upload.</p>
+    </div>
+
+    <div class="w-full flex flex-col gap-sm">
+      <span class="font-title-sm text-title-sm text-ink">Processing mode</span>
+      <div class="flex gap-sm">
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="mode" value="quick" class="peer sr-only" checked>
+          <span class="flex flex-col gap-1 p-md rounded-lg border border-hairline-strong bg-canvas-soft peer-checked:border-primary peer-checked:bg-surface-container-low transition-colors">
+            <span class="font-title-sm text-title-sm text-ink">Quick</span>
+            <span class="font-body-sm text-body-sm text-muted">5–20 min window · ~60s target</span>
+          </span>
+        </label>
+        <label class="flex-1 cursor-pointer">
+          <input type="radio" name="mode" value="full" class="peer sr-only">
+          <span class="flex flex-col gap-1 p-md rounded-lg border border-hairline-strong bg-canvas-soft peer-checked:border-primary peer-checked:bg-surface-container-low transition-colors">
+            <span class="font-title-sm text-title-sm text-ink">Full</span>
+            <span class="font-body-sm text-body-sm text-muted">Up to 1 hour · staged progress</span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="w-full flex flex-col gap-sm" id="quick-minutes-wrap">
+      <label class="font-title-sm text-title-sm text-ink" for="quick_minutes">
+        Quick window: <span id="quick-minutes-label">{{ quick_minutes_default }}</span> minutes
+      </label>
+      <input
+        id="quick_minutes"
+        name="quick_minutes"
+        type="range"
+        min="{{ quick_minutes_min }}"
+        max="{{ quick_minutes_max }}"
+        value="{{ quick_minutes_default }}"
+        class="w-full accent-primary"
+        oninput="document.getElementById('quick-minutes-label').textContent = this.value"
+      >
+      <p class="font-caption text-caption text-muted">Server enforces {{ quick_minutes_min }}–{{ quick_minutes_max }} minutes.</p>
+    </div>
+
+    {% if demo_secret_required %}
+    <div class="w-full flex flex-col gap-sm">
+      <label class="font-title-sm text-title-sm text-ink" for="secret">Demo secret</label>
+      <input id="secret" name="secret" type="password" class="w-full border border-hairline-strong rounded-lg py-2 px-3" required>
+    </div>
+    {% endif %}
+
+    <div class="flex flex-col items-center gap-md w-full">
+      <button type="submit" class="bg-primary text-on-primary font-button text-button px-[18px] py-[10px] rounded hover:bg-primary-active transition-colors w-full md:w-auto min-w-[200px] flex items-center justify-center gap-2">
+        <span class="material-symbols-outlined text-sm">auto_awesome</span>
+        Generate Newsroom
+      </button>
+      <p class="font-caption text-caption text-muted flex items-center gap-1">
+        <span class="material-symbols-outlined text-[14px]">lock</span>
+        Secure processing. Source video deleted after Memvid ingest.
+      </p>
+    </div>
+  </form>
+</section>
+
+<div id="job-area" class="w-full max-w-3xl mx-auto"></div>
+
+<div class="htmx-indicator flex-col items-center justify-center py-section gap-lg max-w-3xl mx-auto" id="loading-state">
+  <div class="relative w-16 h-16 flex items-center justify-center">
+    <div class="absolute inset-0 rounded-full border-2 border-primary/20 pulse-ring"></div>
+    <div class="absolute inset-2 rounded-full border-2 border-t-primary border-r-primary border-b-transparent border-l-transparent animate-spin"></div>
+    <span class="material-symbols-outlined text-primary">manufacturing</span>
+  </div>
+  <div class="flex flex-col items-center gap-2">
+    <span class="font-title-sm text-title-sm text-ink">Starting pipeline…</span>
+    <p class="font-code text-code text-muted flex items-center gap-2">
+      <span class="material-symbols-outlined text-[14px] animate-pulse">terminal</span>
+      Queuing job…
+    </p>
+  </div>
+</div>
+
+{% if past_runs %}
+<section class="w-full max-w-3xl mx-auto flex flex-col gap-md">
+  <h2 class="font-display-sm text-display-sm text-ink border-b border-hairline pb-xs">Past press kits</h2>
+  <ul class="flex flex-col gap-sm">
+    {% for run in past_runs %}
+    <li>
+      <a href="/newsroom/{{ run.id }}" class="flex items-center justify-between p-md bg-surface-card border border-hairline rounded-lg hover:border-primary/30 transition-colors">
+        <span class="font-title-sm text-title-sm text-ink">{{ run.title }}</span>
+        <span class="font-caption text-caption text-muted">{{ run.mode }} · {{ run.created_at[:10] }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.querySelectorAll('input[name="mode"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      const wrap = document.getElementById('quick-minutes-wrap');
+      wrap.style.display = document.querySelector('input[name="mode"]:checked').value === 'quick' ? 'flex' : 'none';
+    });
+  });
+</script>
+{% endblock %}

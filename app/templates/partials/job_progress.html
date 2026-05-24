@@ -1,0 +1,57 @@
+{% set stage = job.stage.value if job.stage is not none else job.status.value %}
+{% set stages = ['queued', 'downloading', 'memvid', 'watching', 'writing', 'mapping', 'done'] %}
+{% set stage_idx = stages.index(stage) if stage in stages else 0 %}
+
+<div
+  id="job-progress-{{ job.id }}"
+  class="flex flex-col items-center justify-center py-section gap-lg w-full max-w-3xl mx-auto"
+  {% if not done %}
+  hx-get="/api/jobs/{{ job.id }}"
+  hx-trigger="every 2s"
+  hx-swap="outerHTML"
+  {% endif %}
+>
+  {% if done %}
+  <div class="flex flex-col items-center gap-md text-center">
+    <span class="material-symbols-outlined text-success text-5xl">check_circle</span>
+    <h2 class="font-display-sm text-display-sm text-ink">Press kit ready</h2>
+    <a href="{{ job.result_url }}" class="bg-primary text-on-primary font-button text-button px-[18px] py-[10px] rounded hover:bg-primary-active transition-colors inline-flex items-center gap-2">
+      <span class="material-symbols-outlined text-sm">newspaper</span>
+      Open Newsroom
+    </a>
+  </div>
+  {% else %}
+  <div class="relative w-16 h-16 flex items-center justify-center">
+    <div class="absolute inset-0 rounded-full border-2 border-primary/20 pulse-ring"></div>
+    <div class="absolute inset-2 rounded-full border-2 border-t-primary border-r-primary border-b-transparent border-l-transparent animate-spin"></div>
+    <span class="material-symbols-outlined text-primary">manufacturing</span>
+  </div>
+  <div class="flex flex-col items-center gap-2 w-full text-center">
+    <span class="font-title-sm text-title-sm text-ink">
+      {% if job.progress_message %}{{ job.progress_message }}{% else %}Processing video assets{% endif %}
+    </span>
+    <p class="font-code text-code text-muted flex items-center gap-2 justify-center">
+      <span class="material-symbols-outlined text-[14px] animate-pulse">terminal</span>
+      Stage: <strong class="text-ink">{{ stage }}</strong> · {{ job.progress_pct }}%
+    </p>
+    <div class="w-full max-w-md h-2 bg-hairline rounded-full overflow-hidden mt-2">
+      <div class="h-full bg-primary transition-all duration-500" style="width: {{ job.progress_pct }}%"></div>
+    </div>
+    <p class="font-caption text-caption text-muted mt-1">
+      Mode: {{ job.mode.value }} {% if job.quick_minutes %}· {{ job.quick_minutes }} min window{% endif %}
+    </p>
+  </div>
+  <div class="flex gap-2 mt-4 flex-wrap justify-center">
+    {% for s, label, bg in [
+      ('downloading', 'Downloading', 'timeline-thinking'),
+      ('memvid', 'Memvid', 'timeline-grep'),
+      ('watching', 'Watching', 'timeline-read'),
+      ('writing', 'Writing', 'timeline-edit'),
+      ('mapping', 'Mapping', 'timeline-done')
+    ] %}
+    {% set idx = stages.index(s) %}
+    <span class="font-caption-uppercase text-caption-uppercase px-[10px] py-[4px] rounded-full border border-hairline-strong shadow-sm {{ bg }} text-on-surface {% if stage_idx >= idx %}stage-active{% else %}stage-pending{% endif %}">{{ label }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
