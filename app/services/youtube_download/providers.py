@@ -105,26 +105,42 @@ def _rapidapi_failure_message(payload: dict[str, Any]) -> str | None:
     return f"RapidAPI error: {err_text}"[:400]
 
 
+_RAPIDAPI_429_DELAYS_SEC = (3.0, 8.0, 20.0)
+
+
 def request_rapidapi_links(url: str, api_key: str, *, timeout: float = 60.0) -> dict[str, Any]:
     """POST YouTube URL to skdeveloper YouTube Video Downloader Fast on RapidAPI."""
     endpoint = f"https://{RAPIDAPI_HOST}{RAPIDAPI_DOWNLOAD_PATH}"
+    last_429: str | None = None
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        response = client.post(
-            endpoint,
-            headers=_rapidapi_headers(api_key),
-            data={"url": url},
-        )
-        if response.status_code == 403:
-            raise ValueError(
-                "RapidAPI rejected the request (403). Check subscription and "
-                "x-rapidapi-key for YouTube Video Downloader Fast."
+        for attempt, delay in enumerate((*_RAPIDAPI_429_DELAYS_SEC, None)):
+            response = client.post(
+                endpoint,
+                headers=_rapidapi_headers(api_key),
+                data={"url": url},
             )
-        if response.status_code == 429:
-            raise ValueError(
-                "RapidAPI rate limit exceeded (429). Retry later or upgrade plan."
-            )
-        response.raise_for_status()
-        payload = response.json()
+            if response.status_code == 403:
+                raise ValueError(
+                    "RapidAPI rejected the request (403). Check subscription and "
+                    "x-rapidapi-key for YouTube Video Downloader Fast."
+                )
+            if response.status_code == 429:
+                last_429 = (
+                    "RapidAPI rate limit exceeded (429). Retry later or upgrade plan."
+                )
+                if delay is not None:
+                    logger.warning(
+                        "RapidAPI 429 for %s (attempt %s), retrying in %ss",
+                        url,
+                        attempt + 1,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
+                raise ValueError(last_429)
+            response.raise_for_status()
+            payload = response.json()
+            break
     if not isinstance(payload, dict):
         raise ValueError("RapidAPI response was not a JSON object.")
     failure = _rapidapi_failure_message(payload)

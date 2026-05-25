@@ -80,6 +80,30 @@ def test_request_rapidapi_links_posts_form_body() -> None:
     assert data["title"] == "Launch"
 
 
+def test_request_rapidapi_links_retries_429_then_succeeds() -> None:
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.raise_for_status = MagicMock()
+    ok.json.return_value = {"title": "OK", "720": "https://cdn.example/v.mp4"}
+
+    rate_limited = MagicMock()
+    rate_limited.status_code = 429
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.side_effect = [rate_limited, rate_limited, ok]
+
+    with (
+        patch("app.services.youtube_download.providers.httpx.Client", return_value=mock_client),
+        patch("app.services.youtube_download.providers.time.sleep"),
+    ):
+        data = request_rapidapi_links("https://www.youtube.com/watch?v=abc", "key")
+
+    assert mock_client.post.call_count == 3
+    assert data["title"] == "OK"
+
+
 def test_request_rapidapi_links_raises_on_quota_message() -> None:
     mock_response = MagicMock()
     mock_response.status_code = 200
