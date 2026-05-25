@@ -104,14 +104,29 @@ class Settings(BaseSettings):
     def session_cookie_secure(self) -> bool:
         return not self.debug
 
+    @staticmethod
+    def _netscape_has_cookie_entries(path: Path) -> bool:
+        """True when the file has at least one non-comment Netscape cookie line."""
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "\t" in stripped:
+                return True
+        return False
+
     @property
     def youtube_cookies_file(self) -> Path | None:
-        """Netscape cookies.txt for yt-dlp when path exists and is non-empty."""
+        """Netscape cookies.txt for yt-dlp when path exists with real cookie rows."""
         raw = self.youtube_cookies_path.strip()
         if not raw:
             return None
         path = Path(raw)
         if not path.is_file() or path.stat().st_size == 0:
+            return None
+        if not self._netscape_has_cookie_entries(path):
             return None
         return path
 

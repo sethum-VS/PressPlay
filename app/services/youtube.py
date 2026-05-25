@@ -229,11 +229,14 @@ class YouTubeService:
         raise DownloadError(detail[:400])
 
     def _should_try_fallback(self, message: str) -> bool:
-        lowered = message.lower()
-        blocked = is_bot_block_message(lowered) or "cloud ips" in lowered
-        if not blocked:
+        chain = resolve_provider_chain(self.settings)
+        if len(chain) <= 1:
             return False
-        return len(resolve_provider_chain(self.settings)) > 1
+        mode = (self.settings.youtube_download_provider or "ytdlp").strip().lower()
+        if mode == DownloadProvider.AUTO.value:
+            return True
+        lowered = message.lower()
+        return is_bot_block_message(lowered) or "cloud ips" in lowered
 
     def _download_external(
         self,

@@ -29,6 +29,13 @@ def test_base_ydl_opts_includes_youtube_player_client() -> None:
     ]
 
 
+def test_youtube_cookies_file_ignores_header_only_placeholder(tmp_path: Path) -> None:
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    settings = Settings(youtube_cookies_path=str(cookies))
+    assert settings.youtube_cookies_file is None
+
+
 def test_base_ydl_opts_cookiefile_when_cookies_path_set(tmp_path: Path) -> None:
     cookies = tmp_path / "cookies.txt"
     cookies.write_text(

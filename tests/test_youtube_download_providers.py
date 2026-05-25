@@ -143,6 +143,35 @@ def test_fetch_via_rapidapi_streams_file(tmp_path: Path) -> None:
     assert dest.read_bytes() == b"fake-mp4-bytes"
 
 
+def test_download_sync_falls_back_after_ytdlp_errno22_in_auto_mode(tmp_path: Path) -> None:
+    settings = Settings(
+        youtube_download_provider="auto",
+        rapidapi_key="test-key",
+        data_dir=str(tmp_path),
+    )
+    service = YouTubeService(settings=settings)
+    job_id = "job-errno22-fallback"
+
+    with (
+        patch.object(
+            service,
+            "_download_ytdlp",
+            side_effect=DownloadError("Could not download video: [Errno 22] Invalid argument"),
+        ),
+        patch.object(service, "_download_external", return_value="Fallback Title") as ext,
+        patch.object(service, "_trim_to_mp4"),
+    ):
+        result = service._download_sync(
+            job_id,
+            "https://www.youtube.com/watch?v=abc",
+            ProcessingMode.QUICK,
+            10,
+        )
+
+    ext.assert_called_once()
+    assert result.title == "Fallback Title"
+
+
 def test_download_sync_falls_back_after_ytdlp_bot_block(tmp_path: Path) -> None:
     settings = Settings(
         youtube_download_provider="auto",
