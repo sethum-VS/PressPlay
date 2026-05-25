@@ -223,3 +223,16 @@ gcloud run services update pressplay \
 **Without `RAPIDAPI_KEY`:** bot blocks still surface a clear job error suggesting configuration or running locally (`./run.sh`).
 
 **Revision note (2026-05-25):** After rotating `pressplay-rapidapi-key`, confirm active revision with `gcloud run services describe pressplay --format='value(status.latestReadyRevisionName)'`. Quota/plan limits on RapidAPI BASIC can surface as job errors even when the key is valid.
+
+## Transcript-only ingest (OSS fallback)
+
+When video download fails (bot block, RapidAPI 429, etc.), PressPlay can continue with **captions only** — no Memvid, no local file.
+
+| Env var | Deploy value | Purpose |
+|---------|--------------|---------|
+| `INGEST_TRANSCRIPT_FALLBACK` | `1` | Enable transcript path after download failure (also automatic when `YOUTUBE_DOWNLOAD_PROVIDER=auto`) |
+| `PIPED_API_BASE` | *(optional)* | AGPL Piped-compatible API base URL; tried in `auto` chain after yt-dlp |
+
+Full OSS matrix: [`docs/YOUTUBE_INGEST_PHASE2.md`](./YOUTUBE_INGEST_PHASE2.md).
+
+**Local dev:** `INGEST_TRANSCRIPT_FALLBACK=1` in `.env` to test without fixing RapidAPI quota.

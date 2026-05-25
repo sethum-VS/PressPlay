@@ -35,12 +35,15 @@ class Settings(BaseSettings):
     graphify_bin: str = ""
     pressplay_use_mock: str = ""
 
-    # YouTube ingest: ytdlp | rapidapi | apify | auto (ytdlp then configured fallbacks)
+    # YouTube ingest: ytdlp | rapidapi | apify | piped | auto (ytdlp then configured fallbacks)
     youtube_download_provider: str = "ytdlp"
     youtube_cookies_path: str = ""
     youtube_po_token: str = ""
     rapidapi_key: str = ""
     apify_api_token: str = ""
+    piped_api_base: str = ""
+    # Transcript-only ingest when download fails (also automatic when provider=auto)
+    ingest_transcript_fallback: str = ""
 
     # Postgres + guest sessions
     database_url: str = ""
@@ -116,6 +119,13 @@ class Settings(BaseSettings):
             if stripped and not stripped.startswith("#") and "\t" in stripped:
                 return True
         return False
+
+    @property
+    def ingest_transcript_fallback_enabled(self) -> bool:
+        raw = self.ingest_transcript_fallback.strip().lower()
+        if raw in ("1", "true", "yes", "on"):
+            return True
+        return (self.youtube_download_provider or "ytdlp").strip().lower() == "auto"
 
     @property
     def youtube_cookies_file(self) -> Path | None:

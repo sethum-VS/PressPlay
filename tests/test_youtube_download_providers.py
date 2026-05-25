@@ -11,6 +11,7 @@ from app.domain.models import ProcessingMode
 from app.services.youtube import YouTubeService
 from app.services.youtube_download.providers import (
     DownloadProvider,
+    fetch_via_piped,
     fetch_via_rapidapi,
     pick_mp4_url,
     request_rapidapi_links,
@@ -27,6 +28,58 @@ def test_resolve_provider_chain_auto_with_rapidapi() -> None:
         DownloadProvider.YTDLP,
         DownloadProvider.RAPIDAPI,
     ]
+
+
+def test_resolve_provider_chain_auto_with_piped_before_rapidapi() -> None:
+    settings = Settings(
+        youtube_download_provider="auto",
+        piped_api_base="https://piped.example",
+        rapidapi_key="test-key",
+    )
+    assert resolve_provider_chain(settings) == [
+        DownloadProvider.YTDLP,
+        DownloadProvider.PIPED,
+        DownloadProvider.RAPIDAPI,
+    ]
+
+
+def test_fetch_via_piped_downloads_stream(tmp_path: Path) -> None:
+    dest = tmp_path / "source.mp4"
+    payload = {
+        "title": "Demo",
+        "videoStreams": [
+            {
+                "url": "https://cdn.example/720.mp4",
+                "quality": "720p",
+                "mimeType": "video/mp4",
+                "videoOnly": False,
+            }
+        ],
+    }
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = payload
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.get.return_value = mock_response
+
+    with (
+        patch("app.services.youtube_download.providers.httpx.Client", return_value=mock_client),
+        patch(
+            "app.services.youtube_download.providers.stream_url_to_file",
+        ) as stream,
+    ):
+        title = fetch_via_piped(
+            "https://www.youtube.com/watch?v=abc12345678",
+            dest,
+            "https://piped.example",
+        )
+
+    assert title == "Demo"
+    stream.assert_called_once()
+    mock_client.get.assert_called_once_with("https://piped.example/streams/abc12345678")
 
 
 def test_resolve_provider_chain_rapidapi_only() -> None:

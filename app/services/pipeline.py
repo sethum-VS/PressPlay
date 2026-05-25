@@ -41,6 +41,37 @@ class PipelineRunner:
         if pipeline_skips_ingest():
             await asyncio.sleep(STUB_STAGE_DELAY_SEC)
 
+    async def _ingest_with_optional_transcript_fallback(
+        self,
+        job_id: str,
+        youtube_url: str,
+        mode,
+        quick_minutes: int | None,
+    ) -> str:
+        try:
+            video = await self.youtube.download(
+                job_id,
+                youtube_url,
+                mode,
+                quick_minutes,
+            )
+            await self._stage(job_id, JobStatus.MEMVID)
+            return await self.memvid.extract_context(video)
+        except DownloadError as exc:
+            if not self.settings.ingest_transcript_fallback_enabled:
+                raise
+            logger.info(
+                "Download failed for job %s; trying transcript-only ingest: %s",
+                job_id,
+                exc,
+            )
+            unified = await asyncio.to_thread(
+                self.youtube.fetch_transcript_unified_context,
+                youtube_url,
+            )
+            await self._stage(job_id, JobStatus.MEMVID)
+            return unified
+
     def _guest_uuid(self, job) -> uuid.UUID:
         if job.guest_session_id:
             return uuid.UUID(job.guest_session_id)
@@ -58,14 +89,12 @@ class PipelineRunner:
                     job.youtube_url, job.quick_minutes
                 )
             else:
-                video = await self.youtube.download(
-                    job.id,
+                unified = await self._ingest_with_optional_transcript_fallback(
+                    job_id,
                     job.youtube_url,
                     job.mode,
                     job.quick_minutes,
                 )
-                await self._stage(job_id, JobStatus.MEMVID)
-                unified = await self.memvid.extract_context(video)
 
             if pipeline_skips_ingest():
                 await self._stage(job_id, JobStatus.MEMVID)

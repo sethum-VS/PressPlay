@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 import httpx
 
 from app.config import Settings
+from app.services.youtube_transcript import extract_youtube_video_id
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ _QUALITY_ORDER = ("1080", "720", "480", "360", "240")
 
 class DownloadProvider(str, Enum):
     YTDLP = "ytdlp"
+    PIPED = "piped"
     RAPIDAPI = "rapidapi"
     APIFY = "apify"
     AUTO = "auto"
@@ -59,6 +61,8 @@ def resolve_provider_chain(settings: Settings) -> list[DownloadProvider]:
 
     if mode == DownloadProvider.AUTO:
         chain = [DownloadProvider.YTDLP]
+        if settings.piped_api_base.strip():
+            chain.append(DownloadProvider.PIPED)
         if settings.rapidapi_key.strip():
             chain.append(DownloadProvider.RAPIDAPI)
         if settings.apify_api_token.strip():
@@ -328,6 +332,61 @@ def _apify_dataset_items(run_id: str, token: str) -> list[dict[str, Any]]:
     if not isinstance(items, list):
         raise ValueError("Apify dataset response was not a list.")
     return [item for item in items if isinstance(item, dict)]
+
+
+def _pick_piped_stream_url(payload: dict[str, Any]) -> str:
+    streams = payload.get("videoStreams") or []
+    if not isinstance(streams, list) or not streams:
+        raise ValueError("Piped response had no videoStreams.")
+
+    candidates: list[tuple[str, int, bool]] = []
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        url = stream.get("url")
+        if not isinstance(url, str) or not url.startswith(("http://", "https://")):
+            continue
+        mime = str(stream.get("mimeType") or "").lower()
+        if mime and "video" not in mime and "mp4" not in mime:
+            continue
+        quality = str(stream.get("quality") or "")
+        height = _height_from_label(quality) or 0
+        video_only = bool(stream.get("videoOnly"))
+        candidates.append((url, height, video_only))
+
+    if not candidates:
+        raise ValueError("No playable stream URL in Piped response.")
+
+    with_audio = [c for c in candidates if not c[2]]
+    pool = with_audio or candidates
+    best = max(pool, key=lambda item: item[1])
+    return best[0]
+
+
+def fetch_via_piped(
+    url: str,
+    dest: Path,
+    api_base: str,
+    *,
+    max_bytes: int | None = None,
+) -> str:
+    """Download via a Piped-compatible instance (AGPL; operator-hosted)."""
+    video_id = extract_youtube_video_id(url)
+    if not video_id:
+        raise ValueError("Could not parse YouTube video id for Piped.")
+    base = api_base.rstrip("/")
+    endpoint = f"{base}/streams/{video_id}"
+    with httpx.Client(timeout=60.0, follow_redirects=True) as client:
+        response = client.get(endpoint)
+        response.raise_for_status()
+        payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("Piped response was not a JSON object.")
+    stream_url = _pick_piped_stream_url(payload)
+    title = str(payload.get("title") or "").strip()
+    logger.info("Piped selected stream for %s via %s", url, base)
+    stream_url_to_file(stream_url, dest, max_bytes=max_bytes)
+    return title
 
 
 def fetch_via_apify(

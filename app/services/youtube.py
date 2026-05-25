@@ -15,10 +15,15 @@ from app.domain.models import ProcessingMode
 from app.services.youtube_download.providers import (
     DownloadProvider,
     fetch_via_apify,
+    fetch_via_piped,
     fetch_via_rapidapi,
     is_bot_block_message,
     missing_fallback_config_message,
     resolve_provider_chain,
+)
+from app.services.youtube_transcript import (
+    extract_youtube_video_id,
+    fetch_via_youtube_transcript_api,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,6 +131,27 @@ class YouTubeService:
                 return f"Title: {title}\n\n{text}"
             return text
 
+    def fetch_transcript_unified_context(self, url: str, title: str = "") -> str:
+        """Build unified_context from OSS transcript sources (skips Memvid / local video)."""
+        url = self.validate_url(url)
+        text = ""
+        video_id = extract_youtube_video_id(url)
+        if video_id:
+            text = fetch_via_youtube_transcript_api(video_id)
+        if not text.strip():
+            text = self.fetch_caption_text(url, title)
+        if not text.strip():
+            raise DownloadError(
+                "Video download failed and no YouTube transcript or captions were available. "
+                "Try a video with auto-generated captions, upload real cookies "
+                "(YOUTUBE_COOKIES_PATH), or configure a download fallback."
+            )
+        header = "## Transcript (YouTube — transcript-only ingest)\n"
+        body = header + text.strip()
+        if title:
+            return f"Title: {title}\n\n{body}"
+        return body
+
     @staticmethod
     def _vtt_to_plaintext(path: Path, max_chars: int = 120_000) -> str:
         raw = path.read_text(encoding="utf-8", errors="replace")
@@ -200,6 +226,19 @@ class YouTubeService:
                         max_seconds,
                     )
                     self._trim_to_mp4(job_dir / "source.mp4", output, max_seconds)
+                elif provider == DownloadProvider.PIPED:
+                    base = self.settings.piped_api_base.strip()
+                    if not base:
+                        raise DownloadError(
+                            "PIPED_API_BASE is not configured for YouTube download."
+                        )
+                    title = fetch_via_piped(
+                        url,
+                        job_dir / "source.mp4",
+                        base,
+                        max_bytes=max_seconds * 2_000_000,
+                    )
+                    self._trim_to_mp4(job_dir / "source.mp4", output, max_seconds)
                 else:
                     continue
                 return VideoDownloadResult(
@@ -263,6 +302,13 @@ class YouTubeService:
                     "APIFY_API_TOKEN is not configured for YouTube download fallback."
                 )
             return fetch_via_apify(url, dest, token, max_bytes=max_bytes)
+        if provider == DownloadProvider.PIPED:
+            base = self.settings.piped_api_base.strip()
+            if not base:
+                raise DownloadError(
+                    "PIPED_API_BASE is not configured for YouTube download."
+                )
+            return fetch_via_piped(url, dest, base, max_bytes=max_bytes)
         raise DownloadError(f"Unknown download provider: {provider.value}")
 
     def _download_ytdlp(
