@@ -134,12 +134,11 @@ class YouTubeService:
     def fetch_transcript_unified_context(self, url: str, title: str = "") -> str:
         """Build unified_context from OSS transcript sources (skips Memvid / local video)."""
         url = self.validate_url(url)
-        text = ""
-        video_id = extract_youtube_video_id(url)
-        if video_id:
-            text = fetch_via_youtube_transcript_api(video_id)
+        text = self.fetch_caption_text(url, title)
         if not text.strip():
-            text = self.fetch_caption_text(url, title)
+            video_id = extract_youtube_video_id(url)
+            if video_id:
+                text = fetch_via_youtube_transcript_api(video_id)
         if not text.strip():
             raise DownloadError(
                 "Video download failed and no YouTube transcript or captions were available. "
