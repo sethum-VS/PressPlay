@@ -881,7 +881,7 @@ When `DATABASE_URL` is set, Alembic revision **`001_initial_schema`** creates:
 - [x] **Technical Event vertical** — `BrandVertical.technical`, `config/brand-technical.yaml`, index select option
 - [x] **Cloud Run cold start** — `migrate_with_retry.sh`, `wait_for_db_connection`, Dockerfile `COPY config/`
 - [x] **YouTube + Cloud Run** — Deno, `player_client`, datacenter IP error mapping; operator cookies via Secret Manager
-- [ ] **YouTube cookies on Cloud Run** — operator creates `pressplay-youtube-cookies` secret and verifies ingest without RapidAPI
+- [ ] **YouTube cookies on Cloud Run** — operator creates `pressplay-youtube-cookies` secret and verifies ingest without RapidAPI *(blocked 2026-05-25: secret still 99 bytes; E2E fails at downloading — bot/sign-in + RapidAPI 429; see `docs/DEPLOY_GCP.md`, `docs/YOUTUBE_INGEST_PHASE2.md`)*
 - [x] **YouTube RapidAPI/Apify fallback** — `youtube_download/providers.py`, `YOUTUBE_DOWNLOAD_PROVIDER=auto`, `tests/test_youtube_download_providers.py`
 - [x] **YouTube transcript-only ingest (OSS)** — `youtube-transcript-api`, `INGEST_TRANSCRIPT_FALLBACK`, optional Piped; `docs/YOUTUBE_INGEST_PHASE2.md`
 - [x] **HTMX 400/429 error swap** — index `responseHandling` + loading `aria-hidden`

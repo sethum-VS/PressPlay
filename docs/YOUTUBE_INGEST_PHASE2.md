@@ -1,62 +1,50 @@
-# YouTube ingest — OSS options matrix
+# YouTube ingest — Phase 2 roadmap
 
-Production on Cloud Run often cannot download video (yt-dlp bot block without real cookies; paid RapidAPI quota). PressPlay supports **transcript-only ingest** so the pipeline can reach Watcher without Memvid or a local file.
+Phase 1 (cookies-only on Cloud Run) is the default path: operator-exported Netscape `cookies.txt` in Secret Manager `pressplay-youtube-cookies`, mounted at `/secrets/youtube-cookies.txt`. No code deploy is required to rotate the secret (`:latest` mount).
 
-## OSS matrix
+**Escalate to Phase 2 only if**, after uploading a real cookies secret (thousands of bytes, logged-in session rows such as `SID`, `LOGIN_INFO`, `__Secure-3PSID`) and optional `YOUTUBE_PO_TOKEN`, production jobs still fail at **downloading** with yt-dlp bot/sign-in errors.
 
-| Approach | License | Needs operator secrets? | Cloud Run today | Env / code |
-|----------|---------|-------------------------|-----------------|------------|
-| **yt-dlp + cookies** | OSS | Yes — Netscape `cookies.txt` | Best when cookies mounted | `YOUTUBE_COOKIES_PATH`, `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp` or `auto` |
-| **yt-dlp subtitles only** | OSS | Same cookies help; sometimes works without video | Used as transcript fallback #2 | `fetch_caption_text` in `YouTubeService` |
-| **youtube-transcript-api** | MIT | No | Primary transcript fallback | `pip install youtube-transcript-api` |
-| **Transcript-only pipeline** | — | No | **Enabled** when download fails | `INGEST_TRANSCRIPT_FALLBACK=1` or `YOUTUBE_DOWNLOAD_PROVIDER=auto` |
-| **Piped instance** | AGPL | Public instance URL (operator choice) | Optional download fallback | `PIPED_API_BASE`, `YOUTUBE_DOWNLOAD_PROVIDER=piped` or `auto` |
-| **RapidAPI / Apify** | Paid | API keys | Quota-dependent | `RAPIDAPI_KEY`, `APIFY_API_TOKEN`, `auto` |
+## Decision tree
 
-## Transcript-only flow
+| Symptom after real cookies | Next track |
+|----------------------------|------------|
+| Video download still blocked | B. Piped/Invidious provider, or C. residential worker |
+| Captions work, video blocked | A. Transcript-first ingest |
+| Need highest reliability | C. Off–Cloud Run yt-dlp worker |
+| Cannot change Memvid pipeline | Not D — Memvid requires local file today |
 
-1. Try normal download chain (yt-dlp → Piped if configured → RapidAPI → Apify).
-2. On `DownloadError`, if `ingest_transcript_fallback_enabled` (explicit `INGEST_TRANSCRIPT_FALLBACK=1` **or** `auto` provider):
-   - Fetch transcript via `youtube-transcript-api`, then yt-dlp captions-only.
-   - Build `unified_context` with header `## Transcript (YouTube — transcript-only ingest)`.
-   - Skip Memvid; continue to Watcher → Strategist → Writer.
+## A. Transcript-first ingest (lowest code change)
 
-**Trade-off:** No visual/Whisper context from Memvid; Watcher runs on text only. Suitable for talk-heavy videos with captions.
+- **youtube-transcript-api** or yt-dlp `skip_download` + subtitles only
+- Pipeline branch: `downloading` → `watching` with caption-only `unified_context`
+- **Tradeoff:** no visual/Whisper richness; UI “transcript-only mode”
 
-## Cookies (operator)
+## B. Piped / Invidious stream provider
 
-```bash
-# Export from browser (logged-in session), gitignored path:
-# secrets/youtube-cookies.txt
+- Self-hosted [Piped](https://github.com/TeamPiped/Piped) or [Invidious](https://github.com/iv-org/invidious)
+- New `DownloadProvider.PIPED` → stream URL → existing `stream_url_to_file` → ffmpeg → Memvid
+- **Tradeoff:** extra service; datacenter Piped may still be blocked
 
-gcloud secrets versions add pressplay-youtube-cookies \
-  --project=PROJECT_ID --data-file=secrets/youtube-cookies.txt
+## C. Residential / off–Cloud Run download worker
 
-scripts/verify_youtube_cookies.sh   # byte size + tab rows, no secret print
-```
+- yt-dlp + small FastAPI worker on homelab/VPS (residential IP)
+- PressPlay calls worker; worker returns GCS signed URL or streams MP4
+- Tailscale / Cloudflare Tunnel for exposure
+- **Tradeoff:** best yt-dlp reliability; highest ops burden
 
-Placeholder secrets (~99 bytes, header only) are ignored by `Settings.youtube_cookies_file`.
+## D. True streaming without local file
 
-## Piped (optional)
+Not viable without replacing Memvid: `memvid put` requires a local path. Alternatives (Vertex video API) are paid and out of OSS scope.
 
-```bash
-# Example public instance — pick one you trust (AGPL); may rate-limit
-export PIPED_API_BASE=https://pipedapi.kavin.rocks
-export YOUTUBE_DOWNLOAD_PROVIDER=auto   # tries Piped after yt-dlp when base set
-```
+## E. Proxy + yt-dlp on Cloud Run
 
-## Deploy env (Cloud Run)
+- `YTDLP_PROXY` in yt-dlp opts; residential proxies are usually commercial
+- **Tradeoff:** recurring cost; may violate provider ToS
 
-`.github/workflows/deploy.yml` sets:
+## What Phase 2 does not include by default
 
-- `YOUTUBE_DOWNLOAD_PROVIDER=auto`
-- `INGEST_TRANSCRIPT_FALLBACK=1`
-- `YOUTUBE_COOKIES_PATH=/secrets/youtube-cookies.txt`
+- RapidAPI quota tuning (429 is plan/quota)
+- Removing Memvid
+- In-app Google login for end users
 
-## Verification
-
-1. Browser E2E: production URL + public video with captions.
-2. Job should pass **downloading** (or fail download then transcript) → **memvid** stage label (transcript path still sets MEMVID stage) → **watching**.
-3. Logs: `transcript-only ingest` when fallback used; no RapidAPI POST required for success.
-
-See also [DEPLOY_GCP.md](./DEPLOY_GCP.md).
+See also [`docs/DEPLOY_GCP.md`](DEPLOY_GCP.md) § YouTube cookies and [`Project Specification.md`](../Project%20Specification.md) checklist §883.

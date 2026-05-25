@@ -143,6 +143,7 @@ chmod +x scripts/smoke_mvp.sh
 | `PRESSPLAY_INSTALL_WHISPER=1` | `./run.sh` runs `memvid models install whisper-small` |
 | `GRAPHIFY_BIN` | Override path to `graphify` CLI |
 | `YOUTUBE_DOWNLOAD_PROVIDER` | `ytdlp` locally; use `auto` on Cloud Run with `RAPIDAPI_KEY` |
+| `YOUTUBE_COOKIES_PATH` | Netscape `cookies.txt` for yt-dlp — **recommended on Cloud Run** ([`docs/DEPLOY_GCP.md`](docs/DEPLOY_GCP.md) § YouTube cookies; verify with `./scripts/verify_youtube_cookies.sh`) |
 | `RAPIDAPI_KEY` | [YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) — bypasses datacenter IP blocks |
 | `APIFY_API_TOKEN` | Optional second fallback (Apify `tazy/youtube-converter`) |
 | `DATABASE_URL` | Postgres async URL (required for MVP deploy) |

@@ -145,6 +145,26 @@ PressPlay uses **yt-dlp** (open source) with **ffmpeg** trim. YouTube often bloc
 2. Export cookies in **Netscape** format to `cookies.txt` (browser extension such as “Get cookies.txt LOCALLY”, or `yt-dlp --cookies-from-browser chrome` once locally then copy the file).
 3. **Never commit** `cookies.txt` — it lives under `secrets/` (gitignored).
 
+**Quality checks before upload** (automation: `./scripts/verify_youtube_cookies.sh`):
+
+| Check | Good | Bad (placeholder) |
+|-------|------|-------------------|
+| Byte size | Thousands (e.g. ≥ 2000) | ~99 (header only) |
+| Tab rows | Many (e.g. ≥ 10) | 0–2 |
+| Cookie names | Includes session IDs (`SID`, `LOGIN_INFO`, `__Secure-3PSID`, …) | Only `PREF`, `VISITOR_*`, `YSC`, … |
+
+**macOS note:** `yt-dlp --cookies-from-browser chrome` often fails with `cannot decrypt v10 cookies: no key found` unless Chrome can access the login keychain. Prefer the **“Get cookies.txt LOCALLY”** extension while logged into YouTube, save to `secrets/youtube-cookies.txt`, then upload.
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=secrets/gcp-sa.json
+gcloud secrets versions add pressplay-youtube-cookies \
+  --project=project-3bb9c91c-69ed-4507-998 \
+  --data-file=secrets/youtube-cookies.txt
+./scripts/verify_youtube_cookies.sh
+```
+
+If cookies are insufficient after rotation, see [`docs/YOUTUBE_INGEST_PHASE2.md`](YOUTUBE_INGEST_PHASE2.md).
+
 ```bash
 # One-time: create secret from exported file
 gcloud secrets create pressplay-youtube-cookies \
