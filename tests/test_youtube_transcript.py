@@ -35,19 +35,20 @@ def test_fetch_via_youtube_transcript_api_formats_text() -> None:
     assert "world" in text
 
 
-def test_fetch_transcript_unified_context_uses_api_then_captions() -> None:
+def test_fetch_transcript_unified_context_uses_captions_before_api() -> None:
     service = YouTubeService()
     with (
+        patch.object(service, "fetch_caption_text", return_value="Caption line"),
         patch(
             "app.services.youtube.fetch_via_youtube_transcript_api",
-            return_value="",
-        ),
-        patch.object(service, "fetch_caption_text", return_value="Caption line"),
+            return_value="API line",
+        ) as api_fetch,
     ):
         unified = service.fetch_transcript_unified_context(
             "https://www.youtube.com/watch?v=abc12345678"
         )
 
+    api_fetch.assert_not_called()
     assert "transcript-only ingest" in unified.lower()
     assert "Caption line" in unified
 

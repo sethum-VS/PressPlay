@@ -80,7 +80,7 @@ jobs:
             --timeout=3600 \
             --port=8000 \
             --set-secrets="SESSION_SECRET=pressplay-session-secret:latest,DATABASE_URL=pressplay-database-url:latest,RAPIDAPI_KEY=pressplay-rapidapi-key:latest,/secrets/youtube-cookies.txt=pressplay-youtube-cookies:latest" \
-            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=5,RATE_LIMIT_PER_IP_PER_HOUR=12,RATE_LIMIT_MIN_INTERVAL_SECONDS=90,MAX_CONCURRENT_JOBS=2,YOUTUBE_DOWNLOAD_PROVIDER=auto,YOUTUBE_COOKIES_PATH=/secrets/youtube-cookies.txt,INGEST_TRANSCRIPT_FALLBACK=1,PIPED_API_BASE=https://pipedapi.kavin.rocks" \
+            --set-env-vars="GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_LOCATION=${GCP_REGION},DEBUG=false,RATE_LIMIT_PER_HOUR=5,RATE_LIMIT_PER_IP_PER_HOUR=12,RATE_LIMIT_MIN_INTERVAL_SECONDS=90,MAX_CONCURRENT_JOBS=2,YOUTUBE_DOWNLOAD_PROVIDER=auto,YOUTUBE_COOKIES_PATH=/secrets/youtube-cookies.txt,INGEST_TRANSCRIPT_FALLBACK=1" \
             --command="sh" \
             --args="-c,sh scripts/migrate_with_retry.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000" \
             --quiet
