@@ -29,6 +29,12 @@ def test_base_ydl_opts_includes_youtube_player_client() -> None:
     ]
 
 
+def test_base_ydl_opts_js_runtimes_when_deno_present(monkeypatch) -> None:
+    monkeypatch.setattr("app.services.youtube.shutil.which", lambda name: "/usr/bin/deno" if name == "deno" else None)
+    opts = YouTubeService()._base_ydl_opts()
+    assert opts.get("js_runtimes") == {"deno": {}}
+
+
 def test_youtube_cookies_file_ignores_header_only_placeholder(tmp_path: Path) -> None:
     cookies = tmp_path / "cookies.txt"
     cookies.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")

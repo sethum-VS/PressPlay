@@ -66,6 +66,9 @@ class YouTubeService:
             "socket_timeout": 30,
             "extractor_args": {"youtube": youtube_args},
         }
+        if shutil.which("deno"):
+            # Production image installs Deno (Dockerfile); required for yt-dlp EJS on server IPs.
+            opts["js_runtimes"] = {"deno": {}}
         cookies = self.settings.youtube_cookies_file
         if cookies is not None:
             opts["cookiefile"] = str(cookies)
