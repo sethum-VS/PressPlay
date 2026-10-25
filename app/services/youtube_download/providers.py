@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 RAPIDAPI_HOST = "youtube-video-downloader-fast.p.rapidapi.com"
 RAPIDAPI_DOWNLOAD_PATH = "/download.php"
-APIFY_ACTOR_ID = "tazy~youtube-converter"
+APIFY_ACTOR_ID = "johnvc~youtube-download-api"
 
 _BOT_PHRASES = (
     "not a bot",
@@ -252,10 +252,11 @@ def stream_url_to_file(
     *,
     timeout: float = 600.0,
     max_bytes: int | None = None,
+    headers: dict[str, str] | None = None,
 ) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with httpx.Client(timeout=timeout, follow_redirects=True) as client:
-        with client.stream("GET", url) as response:
+        with client.stream("GET", url, headers=headers) as response:
             response.raise_for_status()
             total = 0
             with dest.open("wb") as handle:
@@ -297,7 +298,7 @@ def _apify_start_run(url: str, token: str, *, timeout: float = 30.0) -> str:
         response = client.post(
             endpoint,
             params={"token": token},
-            json={"url": url},
+            json={"videoUrls": [url], "format": "video", "videoCodec": "h264"},
         )
         response.raise_for_status()
         data = response.json()
@@ -403,7 +404,11 @@ def fetch_via_apify(
         raise ValueError("Apify actor returned no dataset items.")
     mp4_url = pick_mp4_url(items)
     logger.info("Apify selected MP4 link for %s (run %s)", url, run_id)
-    stream_url_to_file(mp4_url, dest, max_bytes=max_bytes)
+    headers = None
+    if mp4_url.startswith("https://api.apify.com/"):
+        # The file is a record in the run's key-value store; read it with the same token.
+        headers = {"Authorization": f"Bearer {token}"}
+    stream_url_to_file(mp4_url, dest, max_bytes=max_bytes, headers=headers)
     for item in items:
         title = extract_title(item)
         if title:

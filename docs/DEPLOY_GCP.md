@@ -236,7 +236,7 @@ gcloud run services update pressplay \
 |---------|-----------------|--------|
 | `YOUTUBE_DOWNLOAD_PROVIDER` | `auto` | Try yt-dlp first; on bot/sign-in blocks use RapidAPI (and Apify if configured) |
 | `RAPIDAPI_KEY` | Secret Manager | [skdeveloper YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) |
-| `APIFY_API_TOKEN` | *(optional secret)* | Second fallback via Apify actor `tazy/youtube-converter` |
+| `APIFY_API_TOKEN` | *(optional secret)* | Second fallback via Apify actor `johnvc/youtube-download-api` |
 
 **Local dev:** leave `YOUTUBE_DOWNLOAD_PROVIDER=ytdlp` (default) so residential IPs keep using yt-dlp only. Put `RAPIDAPI_KEY` in `.env` (gitignored) to test `auto` locally.
 

@@ -11,6 +11,7 @@ from app.domain.models import ProcessingMode
 from app.services.youtube import YouTubeService
 from app.services.youtube_download.providers import (
     DownloadProvider,
+    fetch_via_apify,
     fetch_via_piped,
     fetch_via_rapidapi,
     pick_mp4_url,
@@ -218,6 +219,55 @@ def test_fetch_via_rapidapi_streams_file(tmp_path: Path) -> None:
 
     assert title == "Clip"
     assert dest.read_bytes() == b"fake-mp4-bytes"
+
+
+def test_fetch_via_apify_requests_mp4_and_streams_file(tmp_path: Path) -> None:
+    dest = tmp_path / "source.mp4"
+    file_url = "https://api.apify.com/v2/key-value-stores/store1/records/abc_720p.mp4"
+
+    start_response = MagicMock()
+    start_response.raise_for_status = MagicMock()
+    start_response.json.return_value = {"data": {"id": "run1"}}
+
+    status_response = MagicMock()
+    status_response.raise_for_status = MagicMock()
+    status_response.json.return_value = {"data": {"status": "SUCCEEDED"}}
+
+    items_response = MagicMock()
+    items_response.raise_for_status = MagicMock()
+    items_response.json.return_value = [
+        {"resultType": "file", "title": "Clip", "container": "mp4", "fileUrl": file_url},
+    ]
+
+    stream_response = MagicMock()
+    stream_response.raise_for_status = MagicMock()
+    stream_response.iter_bytes.return_value = [b"fake-mp4-bytes"]
+
+    mock_client = MagicMock()
+    mock_client.__enter__ = MagicMock(return_value=mock_client)
+    mock_client.__exit__ = MagicMock(return_value=False)
+    mock_client.post.return_value = start_response
+    mock_client.get.side_effect = [status_response, items_response]
+    mock_client.stream.return_value.__enter__ = MagicMock(return_value=stream_response)
+    mock_client.stream.return_value.__exit__ = MagicMock(return_value=False)
+
+    with patch("app.services.youtube_download.providers.httpx.Client", return_value=mock_client):
+        title = fetch_via_apify(
+            "https://www.youtube.com/watch?v=abc",
+            dest,
+            "tok",
+            max_bytes=10_000_000,
+        )
+
+    assert title == "Clip"
+    assert dest.read_bytes() == b"fake-mp4-bytes"
+    assert mock_client.post.call_args.kwargs["json"] == {
+        "videoUrls": ["https://www.youtube.com/watch?v=abc"],
+        "format": "video",
+        "videoCodec": "h264",
+    }
+    assert mock_client.stream.call_args.args == ("GET", file_url)
+    assert mock_client.stream.call_args.kwargs["headers"] == {"Authorization": "Bearer tok"}
 
 
 def test_download_sync_falls_back_after_ytdlp_errno22_in_auto_mode(tmp_path: Path) -> None:

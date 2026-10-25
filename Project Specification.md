@@ -582,7 +582,7 @@ pressplay/
 | `YOUTUBE_COOKIES_PATH` | *(unset)* | Netscape `cookies.txt` for yt-dlp (`/secrets/youtube-cookies.txt` on Cloud Run) |
 | `YOUTUBE_PO_TOKEN` | *(unset)* | Optional comma-separated yt-dlp PO tokens |
 | `RAPIDAPI_KEY` | *(unset)* | RapidAPI key for skdeveloper YouTube Video Downloader Fast (Cloud Run Secret Manager) |
-| `APIFY_API_TOKEN` | *(unset)* | Optional Apify token for `tazy/youtube-converter` |
+| `APIFY_API_TOKEN` | *(unset)* | Optional Apify token for `johnvc/youtube-download-api` |
 | `GEMINI_API_KEY` | *(optional)* | For Graphify CLI `--backend gemini`; not required for Vertex Watcher/Writer |
 | `DATABASE_URL` | *(unset = FS dev)* | `postgresql+asyncpg://...` → Postgres jobs, press kits, guest sessions |
 | `SESSION_SECRET` | *(required in compose / .env)* | Cookie signing; use literal hex from `openssl rand -hex 32` in `.env` (no shell `$(...)` in file) |

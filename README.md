@@ -145,7 +145,7 @@ chmod +x scripts/smoke_mvp.sh
 | `YOUTUBE_DOWNLOAD_PROVIDER` | `ytdlp` locally; use `auto` on Cloud Run with `RAPIDAPI_KEY` |
 | `YOUTUBE_COOKIES_PATH` | Netscape `cookies.txt` for yt-dlp — **recommended on Cloud Run** ([`docs/DEPLOY_GCP.md`](docs/DEPLOY_GCP.md) § YouTube cookies; verify with `./scripts/verify_youtube_cookies.sh`) |
 | `RAPIDAPI_KEY` | [YouTube Video Downloader Fast](https://rapidapi.com/skdeveloper/api/youtube-video-downloader-fast) — bypasses datacenter IP blocks |
-| `APIFY_API_TOKEN` | Optional second fallback (Apify `tazy/youtube-converter`) |
+| `APIFY_API_TOKEN` | Optional second fallback (Apify `johnvc/youtube-download-api`) |
 | `DATABASE_URL` | Postgres async URL (required for MVP deploy) |
 | `SESSION_SECRET` | Cookie signing secret (required in Docker compose) |
 | `GUEST_SESSION_TTL_DAYS` | Guest session lifetime (default `30`) |
